@@ -34,6 +34,28 @@ void StapleTracker::trackerInit(const cv::Mat &im, cv::Rect bbox) {
     createGaussianResponse(cf_response_size, output_sigma, y);
     cv::dft(y, yf);
 
+    // FURTHER STEPS needed for first training
+    // extract patch of size bg_size and resize to norm_bg_size
+    cv::Mat im_patch_bg;
+    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
+
+    // init adn compute feature map, of cf_response_size
+    featureMap = cv::MatND(im_patch_bg.rows / _params.hog_cell_size, im_patch_bg.cols  / _params.hog_cell_size, CV_32FC(28));
+    getFeatureMap(im_patch_bg, featureMap);
+
+    // initializing feature map splits
+    assert(featureMapSplited.size() == featureMap.channels());
+    for (int ch = 0; ch < featureMap.channels(); ++ch) {
+        // 2 channel because after dft we get complex num (real + imaginary parts)
+        featureMapSplited[ch] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+    }
+
+    // compute FFT
+    splitMatND(featureMap, featureMapSplited);
+    for (auto& channel : featureMapSplited) {
+        cv::dft(channel, channel);
+    }
+
     // initial first train
     firstFrame = true;
     trackerTrain(im);
@@ -280,25 +302,7 @@ void StapleTracker::createGaussianResponse(cv::Size rect_size, double sigma, cv:
 
 void StapleTracker::trackerTrain(const cv::Mat &im) {
     
-    // extract patch of size bg_size and resize to norm_bg_size
-    cv::Mat im_patch_bg;
-    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
-
-    // compute feature map, of cf_response_size
-    cv::MatND xt;
-    getFeatureMap(im_patch_bg, xt);
-
-    // compute FFT
-    std::vector<cv::Mat> xtsplit;
-    splitMatND(xt, xtsplit);
-
-    std::vector<cv::Mat> xtf; // xtf is splits of xt
-
-    for (auto& channel : xtsplit) {
-        cv::Mat dimf;
-        cv::dft(channel, dimf);
-        xtf.push_back(std::move(dimf));
-    }
+    // before TRAIN stage feature map should be generated and splited to featureMapSplited
 
     // FILTER UPDATE
     // Compute expectations over circular shifts,
@@ -309,16 +313,16 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
 
     float invArea = 1.f / (cf_response_size.width * cf_response_size.height);
 
-    for (int ch = 0; ch < xtf.size(); ch++)
+    for (int ch = 0; ch < featureMapSplited.size(); ch++)
     {
-        cv::Mat dim = cv::Mat(xt.rows, xt.cols, CV_32FC2);
-        
+        cv::Mat dim = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+
         // performing complex numbers multiplication
-        // conj(yf) .* xtf[ch]
+        // conj(yf) .* featureMapSplited[ch]
         dim.forEach<cv::Vec2f>
         (
-            [&xtf, ch, this, invArea](cv::Vec2f &pair, const int * pos) {
-                auto xtf_vec = xtf[ch].at<cv::Vec2f>(pos);
+            [ch, this, invArea](cv::Vec2f &pair, const int * pos) {
+                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
                 auto yf_vec  = yf.at<cv::Vec2f>(pos);
                 pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
                 pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
@@ -328,16 +332,16 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         new_hf_num.push_back(std::move(dim));
     }
 
-    for (int ch = 0; ch < xtf.size(); ch++) {
+    for (int ch = 0; ch < featureMapSplited.size(); ch++) {
         // only 1 channel because after multiplication imagine part are zeroed, so unnecesary
-        cv::Mat dim_den = cv::Mat(xt.rows, xt.cols, CV_32FC1);
-        
+        cv::Mat dim_den = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC1);
+
         // performing complex numbers multiplication
-        // conj(xtf[ch]) .* xtf[ch]
+        // conj(featureMapSplited[ch]) .* featureMapSplited[ch]
         dim_den.forEach<float>
         (
-            [&xtf, ch, invArea](float &val, const int * pos) {
-                auto xtf_vec = xtf[ch].at<cv::Vec2f>(pos);
+            [this, ch, invArea](float &val, const int * pos) {
+                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
                 val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
             }
         );
@@ -351,11 +355,13 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         hf_num = std::move(new_hf_num);
     } else {
         // subsequent frames, update the model by linear interpolation
-        for (int ch =  0; ch < xt.channels(); ch++) {
+        for (int ch =  0; ch < featureMap.channels(); ch++) {
             hf_den[ch] = (1 - _params.learning_rate_cf) * hf_den[ch] + _params.learning_rate_cf * new_hf_den[ch];
             hf_num[ch] = (1 - _params.learning_rate_cf) * hf_num[ch] + _params.learning_rate_cf * new_hf_num[ch];
         }
 
+        cv::Mat im_patch_bg;
+        getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
         updateHistModel(false, im_patch_bg, _params.learning_rate_pwp);
     }
 
@@ -416,29 +422,38 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
     }
 }
 
-void StapleTracker::splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit) {
-    int w = xt.cols;
-    int h = xt.rows;
-    int cn = xt.channels();
+void StapleTracker::splitFeatureMap(const cv::Mat &im) {
+    // extract patch of size bg_size and resize to norm_bg_size
+    cv::Mat im_patch_bg;
+    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
+
+    // compute feature map, of cf_response_size
+    getFeatureMap(im_patch_bg, featureMap);
+
+    // compute FFT
+    splitMatND(featureMap, featureMapSplited);
+    for (auto& channel : featureMapSplited) {
+        cv::dft(channel, channel);
+    }
+}
+
+void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat> &xtsplit) {
+    int cn = featureMap.channels();
 
     assert(cn == 28);
+    assert(xtsplit.size() == 28);
 
     for (int k = 0; k < cn; k++)
     {
-        // 2 channel because after dft we get complex num (real + imaginary parts) 
-        cv::Mat dim = cv::Mat(h, w, CV_32FC2);
-
         typedef cv::Vec<float, 28> Vec28f;
 
-        dim.forEach<cv::Vec2f>
+        xtsplit[k].forEach<cv::Vec2f>
         (
-            [&xt, k](cv::Vec2f &pair, const int * pos) {
-                pair[0] = xt.at<Vec28f>(pos)[k];
+            [&featureMap, k](cv::Vec2f &pair, const int * pos) {
+                pair[0] = featureMap.at<Vec28f>(pos)[k];
                 pair[1] = 0.0f;
             }
         );
-
-        xtsplit.push_back(dim);
     }
 }
 
@@ -473,34 +488,7 @@ cv::Mat ensure_real(const cv::Mat &complex) {
 // TESTING step
 cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
-    // extract patch of size bg_size and resize to norm_bg_size
-    cv::Mat im_patch_cf;
-    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_cf);
-
-    cv::Size pwp_search_size;
-
-    pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
-    pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
-
-    // compute feature map
-    cv::MatND xt_windowed;
-    getFeatureMap(im_patch_cf, xt_windowed);
-    // apply Hann window in getFeatureMap
-
-    // compute FFT
-
-    // firstly, split 28 channels to separate 2 channel images 
-    // (2nd channel is zeroed, 2nd channel needed for dft)
-    std::vector<cv::Mat> xtsplit;
-    splitMatND(xt_windowed, xtsplit);
-    
-    std::vector<cv::Mat> xtf; // xtf is splits of xtf
-
-    for (auto& channel : xtsplit) {
-        cv::Mat dimf;
-        cv::dft(channel, dimf);
-        xtf.push_back(std::move(dimf));
-    }
+    // before UPDATE stage feature map should be generated and splited to featureMapSplited
 
     // Correlation between filter and test patch gives the response
     // Solve diagonal system per pixel.
@@ -509,7 +497,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
     if (_params.den_per_channel) {
         for (uint ch = 0; ch < hf_num.size(); ++ch) {
-            cv::Mat dim(xt_windowed.rows, xt_windowed.cols, CV_32FC2);
+            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
 
             cv::Mat rval = (hf_den[ch] + _params.lambda);
 
@@ -525,12 +513,12 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
         }
     }
     else {
-        cv::Mat sum_hf_den(xt_windowed.rows, xt_windowed.cols, CV_32FC1, _params.lambda);
+        cv::Mat sum_hf_den(featureMap.rows, featureMap.cols, CV_32FC1, _params.lambda);
         for (int ch = 0; ch < hf_den.size(); ++ch) {
             sum_hf_den += hf_den[ch];
         }
         for (int ch = 0; ch < hf_num.size(); ++ch) {
-            cv::Mat dim(xt_windowed.rows, xt_windowed.cols, CV_32FC2);
+            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
 
             dim.forEach<cv::Vec2f>
             (
@@ -544,16 +532,16 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
         }
     }
 
-    cv::Mat response_cf_sum(xt_windowed.rows, xt_windowed.cols, CV_32FC2, cv::Scalar(0, 0));
+    cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar(0, 0));
 
-    for (int ch = 0; ch < xtf.size(); ch++)
+    for (int ch = 0; ch < featureMapSplited.size(); ch++)
     {   
         // performing complex numbers multiplication
-        // conj(hf[ch]) .* xtf[ch]
+        // conj(hf[ch]) .* featureMapSplited[ch]
         response_cf_sum.forEach<cv::Vec2f>
         (
-            [&xtf, &hf, ch](cv::Vec2f &pair, const int *pos) {
-                auto xtf_vec = xtf[ch].at<cv::Vec2f>(pos);
+            [this, &hf, ch](cv::Vec2f &pair, const int *pos) {
+                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
                 auto hf_vec  = hf[ch].at<cv::Vec2f>(pos);
                 pair[0] += xtf_vec[0] * hf_vec[0] + xtf_vec[1] * hf_vec[1];
                 pair[1] += xtf_vec[1] * hf_vec[0] - xtf_vec[0] * hf_vec[1];
@@ -588,6 +576,10 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
         cv::resize(response_cf_cropped, temp, norm_delta_area, 0, 0, cv::INTER_LINEAR);
         response_cf = temp;
     }
+
+    cv::Size pwp_search_size;
+    pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
+    pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
 
     // extract patch of size pwp_search_size and resize to norm_pwp_search_size
     cv::Mat im_patch_pwp;
@@ -742,6 +734,7 @@ void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &re
 }
 
 cv::Rect StapleTracker::getNextPos(const cv::Mat &im) {
+    splitFeatureMap(im);
     cv::Rect newPos = trackerUpdate(im);
     trackerTrain(im);
     return newPos;

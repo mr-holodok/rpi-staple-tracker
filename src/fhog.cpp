@@ -563,21 +563,21 @@ void fhog28(cv::MatND &fhog_feature, const cv::Mat& input, int binSize, int nOri
     // out = zeros(h, w, 28, 'single');
     // out(:,:,2:28) = temp(:,:,1:27);
 
-    float* H = new float[w*h*CHANNELS];
+    assert(fhog_feature.rows == h);
+    assert(fhog_feature.cols == w);
+    assert(fhog_feature.channels() == CHANNELS);
+    float* H = fhog_feature.ptr<float>(0);
 
-    for(int i = 0;i < w; i++)
-        for(int j = 0;j < h; j++) {
+    for(int i = 0;i < w; i++) {
+        for (int j = 0; j < h; j++) {
             //H[i*h*CHANNELS+j*CHANNELS+0] = 0.0;
-            H[j*w*CHANNELS+i*CHANNELS+0] = 0.0;
-            for(int k = 0;k < CHANNELS-1;k++) {
+            H[j * w * CHANNELS + i * CHANNELS + 0] = 0.0;
+            for (int k = 0; k < CHANNELS - 1; k++) {
                 //H[i*h*CHANNELS+j*CHANNELS+k+1] = HH[k*w*h+i*h+j]; // ->hwd
-                H[j*w*CHANNELS+i*CHANNELS+k+1] = HH[k*w*h+i*h+j]; // ->whd
+                H[j * w * CHANNELS + i * CHANNELS + k + 1] = HH[k * w * h + i * h + j];// ->whd
             }
         }
-
-    fhog_feature = cv::MatND(h,w,CV_32FC(CHANNELS),H).clone();
-
-    delete[] H;
+    }
 
     delete[] M; delete[] O;
     delete[] II;delete[] I;delete[] HH;

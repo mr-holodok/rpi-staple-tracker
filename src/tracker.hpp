@@ -20,6 +20,7 @@ protected:
     void updateHistModel(bool new_model, cv::Mat &patch, double learning_rate_pwp=0.0);
     void createGaussianResponse(cv::Size rect_size, double sigma, cv::Mat &output);
     void getFeatureMap(cv::Mat &im_patch, cv::MatND &output);
+    void splitFeatureMap(const cv::Mat &im);
     void splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit);
     void cropFilterResponse(const cv::Mat &response_cf, cv::Size response_size, cv::Mat& output);
     void getColourMap(const cv::Mat &patch, cv::Mat& output);
@@ -41,6 +42,9 @@ protected:
     } _params;
 
     bool firstFrame = false;
+
+    cv::MatND featureMap;
+    std::vector<cv::Mat> featureMapSplited {28};
 
     cv::Point center_pos;
     cv::Size target_sz;
