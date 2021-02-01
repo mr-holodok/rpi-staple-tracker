@@ -45,8 +45,6 @@ void mouseCallBack(int event, int x, int y, int flags, void *userdata) {
         isLBtnDown = false;
 
         staple.trackerInit(image, calcRectByPoints(selectionRectPoint1, selectionRectPoint2));
-        // TODO: change staple train interface - without second param
-        staple.trackerTrain(image, true);
         isTracked = true;
     } else if (event == cv::EVENT_MOUSEMOVE && isLBtnDown) {
         selectionRectPoint2.x = x;
@@ -103,7 +101,7 @@ int webcam_main() {
 
     cv::Rect_<float> location;
 
-    long update_duration = 0l, train_duration = 0l;
+    long update_duration = 0l;
 
     while (!stop_flag) {
 
@@ -116,21 +114,15 @@ int webcam_main() {
         if (isTracked) {
 
             auto start = std::chrono::high_resolution_clock::now();
-            location = staple.trackerUpdate(image);
+            location = staple.getNextPos(image);
             auto stop = std::chrono::high_resolution_clock::now();
             update_duration += std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count();
-
-            start = std::chrono::high_resolution_clock::now();
-            staple.trackerTrain(image, false);
-            stop = std::chrono::high_resolution_clock::now();
-            train_duration += std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count();
 
             cv::rectangle(image, location, cv::Scalar(0, 0, 255), 2);
 
             if (nFrames % 10 == 0) {
-                std::cout << "Update: " << update_duration / 10 << " | Train: " << train_duration / 10 << std::endl;
+                std::cout << "Update: " << update_duration / 10 <<  std::endl;
                 update_duration = 0l;
-                train_duration = 0l;
             }
         } else if (isLBtnDown) {
             // else we are drawing selection rect

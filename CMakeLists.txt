@@ -19,24 +19,14 @@ endif (RPi2 OR RPi3)
 
 # special optimizations for Raspberry Pi 2/3 or default native optimizations
 if (RPi2)
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=armv7-a -mfpu=neon -mtune=native -funroll-loops -DNDEBUG -DBOOST_DISABLE_ASSERTS" CACHE STRING COMPILE_FLAGS FORCE)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=armv7-a+neon-vfpv4 -mfpu=neon-vfpv4 -mtune=native -ffast-math -funroll-loops -DNDEBUG -DBOOST_DISABLE_ASSERTS" CACHE STRING COMPILE_FLAGS FORCE)
+    set(CMAKE_CXX_FLAGS_DEBUG "-mfpu=neon-vfpv4")
 elseif (RPi3)
     # TODO: add flags specific to RPi3 (ex. core architecture for armv8)
 else ()
-    message("CMAKE_CXX_FLAGS_RELEASE are: ${CMAKE_CXX_FLAGS_RELEASE}")
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g -march=native --fast-math -ffast-math -mtune=native -funroll-loops -DNDEBUG -DBOOST_DISABLE_ASSERTS" CACHE STRING COMPILE_FLAGS FORCE)
-    #  set(CMAKE_CXX_FLAGS_RELEASE "-g -O3 -march=native -mfpu=native -mtune=native -funroll-loops -DNDEBUG -DBOOST_DISABLE_ASSERTS" CACHE STRING COMPILE_FLAGS FORCE)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g -march=native -ffast-math -funroll-loops -DNDEBUG -DBOOST_DISABLE_ASSERTS" CACHE STRING COMPILE_FLAGS FORCE)
 endif(RPi2)
 
 
-if (UNIX)
-    find_package(OpenCV REQUIRED)
-    target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} pthread)
-elseif (WIN32)
-    # PAY ATTENTION: if file 'findOpenCV.cmake' is not found by CMake -
-    # then provide 'OpenCV_DIR' variable, pointing to 'OpenCVConfig.cmake'
-    # and 'OpenCVModules.cmake' [needed in OpenCVConfig.cmake]
-    find_package(OpenCV REQUIRED)
-    # include_directories(${OpenCV_INCLUDE_DIRS}) # Not needed for CMake >= 2.8.11
-    target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
-endif (UNIX)
+find_package(OpenCV REQUIRED)
+target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} pthread)

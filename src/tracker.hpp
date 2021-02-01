@@ -9,10 +9,12 @@ class StapleTracker {
 public:
     
     void trackerInit(const cv::Mat &im, cv::Rect bbox);
-    void trackerTrain(const cv::Mat &im, bool first);
-    cv::Rect trackerUpdate(const cv::Mat &im);
+    cv::Rect getNextPos(const cv::Mat &im);
 
 protected:
+    void trackerTrain(const cv::Mat &im);
+    cv::Rect trackerUpdate(const cv::Mat &im);
+
     void initAllAreas(const cv::Mat &im);
     void getSubwindow(const cv::Mat &im, cv::Point_<float> center_pnt, cv::Size model_sz, cv::Size orig_sz, cv::Mat &out);
     void updateHistModel(bool new_model, cv::Mat &patch, double learning_rate_pwp=0.0);
@@ -37,6 +39,8 @@ protected:
         double merge_factor = 0.3;
         bool den_per_channel = false;
     } _params;
+
+    bool firstFrame = false;
 
     cv::Point center_pos;
     cv::Size target_sz;

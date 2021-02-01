@@ -41,10 +41,8 @@ int main() {
         tic = cv::getTickCount();
         if (frame == 0) {
             staple.trackerInit(image, location);
-            staple.trackerTrain(image, true);
         } else {
-            location = staple.trackerUpdate(image);
-            staple.trackerTrain(image, false);
+            location = staple.getNextPos(image);
         }
 
         toc = cv::getTickCount() - tic;

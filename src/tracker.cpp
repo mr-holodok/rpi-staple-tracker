@@ -33,6 +33,11 @@ void StapleTracker::trackerInit(const cv::Mat &im, cv::Rect bbox) {
     cv::Mat y;
     createGaussianResponse(cf_response_size, output_sigma, y);
     cv::dft(y, yf);
+
+    // initial first train
+    firstFrame = true;
+    trackerTrain(im);
+    firstFrame = false;
 }
 
 void StapleTracker::initAllAreas(const cv::Mat &im) {
@@ -273,7 +278,7 @@ void StapleTracker::createGaussianResponse(cv::Size rect_size, double sigma, cv:
     } 
 }
 
-void StapleTracker::trackerTrain(const cv::Mat &im, bool first) {
+void StapleTracker::trackerTrain(const cv::Mat &im) {
     
     // extract patch of size bg_size and resize to norm_bg_size
     cv::Mat im_patch_bg;
@@ -281,7 +286,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool first) {
 
     // compute feature map, of cf_response_size
     cv::MatND xt;
-    getFeatureMap(im_patch_bg, xt); 
+    getFeatureMap(im_patch_bg, xt);
 
     // compute FFT
     std::vector<cv::Mat> xtsplit;
@@ -340,7 +345,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool first) {
         new_hf_den.push_back(std::move(dim_den));
     }
 
-    if (first) {
+    if (firstFrame) {
         // first frame, train with a single image
         hf_den = std::move(new_hf_den);
         hf_num = std::move(new_hf_num);
@@ -355,7 +360,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool first) {
     }
 
     // update bbox position
-    if (first) {
+    if (firstFrame) {
         rect_position.x = center_pos.x - target_sz.width/2;
         rect_position.y = center_pos.y - target_sz.height/2;
         rect_position.width = target_sz.width;
@@ -734,4 +739,10 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
 // MERGERESPONSES interpolates the two responses with the hyperparameter MERGE_FACTOR
 void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &response_pwp, cv::Mat &response) {
     response = (1 - _params.merge_factor) * response_cf + _params.merge_factor * response_pwp;
+}
+
+cv::Rect StapleTracker::getNextPos(const cv::Mat &im) {
+    cv::Rect newPos = trackerUpdate(im);
+    trackerTrain(im);
+    return newPos;
 }
