@@ -4,7 +4,7 @@
 #include <sstream>
 
 
-void StapleTracker::trackerInit(const cv::Mat &im, cv::Rect bbox) {
+void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
 
     target_sz.width = bbox.width;
     target_sz.height = bbox.height;
@@ -125,7 +125,7 @@ void StapleTracker::initAllAreas(const cv::Mat &im) {
     norm_pwp_search_size.height = norm_target_size.height + norm_delta_area.height - 1;
 }
 
-void StapleTracker::getSubwindow(const cv::Mat &im, cv::Point_<float> center_pnt, cv::Size model_sz, cv::Size orig_sz, cv::Mat &out) {
+void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &center_pnt, const cv::Size &model_sz, const cv::Size &orig_sz, cv::Mat &out) {
     cv::Size sz = orig_sz; // scale adaptation
 
     // make sure the size is not to small
@@ -270,7 +270,7 @@ void StapleTracker::updateHistModel(bool new_model, cv::Mat &patch, double learn
 }
 
 
-void StapleTracker::createGaussianResponse(cv::Size rect_size, double sigma, cv::Mat &output) { 
+void StapleTracker::createGaussianResponse(const cv::Size& rect_size, double sigma, cv::Mat &output) {
 
     double s = 2.0 * sigma * sigma; 
 
@@ -311,9 +311,9 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
     std::vector<cv::Mat> new_hf_num;
     std::vector<cv::Mat> new_hf_den;
 
-    float invArea = 1.f / (cf_response_size.width * cf_response_size.height);
+    float invArea = 1.f / (float)(cf_response_size.width * cf_response_size.height);
 
-    for (int ch = 0; ch < featureMapSplited.size(); ch++)
+    for (auto & ch : featureMapSplited)
     {
         cv::Mat dim = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
 
@@ -321,8 +321,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         // conj(yf) .* featureMapSplited[ch]
         dim.forEach<cv::Vec2f>
         (
-            [ch, this, invArea](cv::Vec2f &pair, const int * pos) {
-                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
+            [&ch, this, invArea](cv::Vec2f &pair, const int * pos) {
+                auto xtf_vec = ch.at<cv::Vec2f>(pos);
                 auto yf_vec  = yf.at<cv::Vec2f>(pos);
                 pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
                 pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
@@ -332,7 +332,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         new_hf_num.push_back(std::move(dim));
     }
 
-    for (int ch = 0; ch < featureMapSplited.size(); ch++) {
+    for (auto & ch : featureMapSplited) {
         // only 1 channel because after multiplication imagine part are zeroed, so unnecesary
         cv::Mat dim_den = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC1);
 
@@ -340,8 +340,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         // conj(featureMapSplited[ch]) .* featureMapSplited[ch]
         dim_den.forEach<float>
         (
-            [this, ch, invArea](float &val, const int * pos) {
-                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
+            [this, &ch, invArea](float &val, const int * pos) {
+                auto xtf_vec = ch.at<cv::Vec2f>(pos);
                 val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
             }
         );
@@ -413,7 +413,7 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
             Vec28f& val = pDst[0];
 
             val = val * pHann[0];
-            val[0] = (alpha * pGray[0] - betta) * pHann[0];
+            val[0] = (alpha * (float)(pGray[0]) - betta) * pHann[0];
 
             ++pDst;
             ++pHann;
@@ -514,17 +514,17 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     }
     else {
         cv::Mat sum_hf_den(featureMap.rows, featureMap.cols, CV_32FC1, _params.lambda);
-        for (int ch = 0; ch < hf_den.size(); ++ch) {
-            sum_hf_den += hf_den[ch];
+        for (auto & ch : hf_den) {
+            sum_hf_den += ch;
         }
-        for (int ch = 0; ch < hf_num.size(); ++ch) {
+        for (auto & ch : hf_num) {
             cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
 
             dim.forEach<cv::Vec2f>
             (
-                [&sum_hf_den, this, ch](cv::Vec2f &pair, const int *pos) {
-                    pair[0] = hf_num[ch].at<cv::Vec2f>(pos)[0] / sum_hf_den.at<float>(pos);
-                    pair[1] = hf_num[ch].at<cv::Vec2f>(pos)[1] / sum_hf_den.at<float>(pos);
+                [&sum_hf_den, this, &ch](cv::Vec2f &pair, const int *pos) {
+                    pair[0] = ch.at<cv::Vec2f>(pos)[0] / sum_hf_den.at<float>(pos);
+                    pair[1] = ch.at<cv::Vec2f>(pos)[1] / sum_hf_den.at<float>(pos);
                 }
             );
 
@@ -603,7 +603,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     // find max value and it's indices
     cv::minMaxLoc(response, nullptr, &max_val, nullptr, &max_loc);
 
-    cv::Point2f center((norm_delta_area.width + 1) / 2 - 1, (norm_delta_area.height + 1) / 2 - 1);
+    cv::Point2f center((norm_delta_area.width + 1) / 2.0 - 1, (norm_delta_area.height + 1) / 2.0 - 1);
     
     center_pos.x += (max_loc.x - center.x) / area_resize_factor;
     center_pos.y += (max_loc.y - center.y) / area_resize_factor;
@@ -619,7 +619,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
 // CROPFILTERRESPONSE makes RESPONSE_CF of size RESPONSE_SIZE (i.e. same size of colour response)
 // prerequisite: RESPONSE_SIZE width and height must be odd
-void StapleTracker::cropFilterResponse(const cv::Mat &response_cf, cv::Size response_size, cv::Mat& output) {
+void StapleTracker::cropFilterResponse(const cv::Mat &response_cf, const cv::Size &response_size, cv::Mat &output) {
     
     int w = response_cf.cols;
     int h = response_cf.rows;
@@ -650,7 +650,7 @@ void StapleTracker::cropFilterResponse(const cv::Mat &response_cf, cv::Size resp
     } 
 }
 
-void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) {
+void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
     
     int h = patch.rows;
     int w = patch.cols;
@@ -710,7 +710,7 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
     int n1 = w - m.width + 1;
     int n2 = h - m.height + 1;
     
-    float invArea = 1.f / (m.width * m.height);
+    float invArea = 1.f / (float)(m.width * m.height);
 
     cv::Mat integral_img;
     // compute integral image
@@ -729,7 +729,7 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
 }
 
 // MERGERESPONSES interpolates the two responses with the hyperparameter MERGE_FACTOR
-void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &response_pwp, cv::Mat &response) {
+void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &response_pwp, cv::Mat &response) const {
     response = (1 - _params.merge_factor) * response_cf + _params.merge_factor * response_pwp;
 }
 
