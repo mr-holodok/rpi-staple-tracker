@@ -1,7 +1,6 @@
 #include "tracker.hpp"
 #include "fhog.h"
 #include <opencv2/imgproc.hpp>
-#include <sstream>
 
 
 void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
@@ -11,9 +10,9 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     
     // center_pos is the centre of the initial bounding box
     center_pos.x = bbox.x + bbox.width / 2;
-    center_pos.y = bbox.y + bbox.height / 2; 
+    center_pos.y = bbox.y + bbox.height / 2;
 
-    initAllAreas(im);
+    initAllAreas(im.size());
 
     // patch of the target + padding
     cv::Mat patch_paded;
@@ -40,7 +39,7 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
 
     // init adn compute feature map, of cf_response_size
-    featureMap = cv::MatND(im_patch_bg.rows / _params.hog_cell_size, im_patch_bg.cols  / _params.hog_cell_size, CV_32FC(28));
+    featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(28));
     getFeatureMap(im_patch_bg, featureMap);
 
     // initializing feature map splits
@@ -62,23 +61,89 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     firstFrame = false;
 }
 
-void StapleTracker::initAllAreas(const cv::Mat &im) {
+// returns optimal bg_size value in terms of optimal size for DFT
+// cause cf_response_size depends on bg_size
+// also optimal DFT size is faster to compute, so method used for optimisation purposes
+cv::Size StapleTracker::getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, const int fixed_area, const int hog_cell_size) {
     // we want a regular frame surrounding the object
     auto avg_dim = (target_sz.width + target_sz.height) / 2.0;
 
     // size from which we extract features
+    cv::Size bg_size;
     bg_size.width = std::round(target_sz.width + avg_dim);
     bg_size.height = std::round(target_sz.height + avg_dim);
+
+    // saturate to image size
+    bg_size.width = std::min(bg_size.width, scene_sz.width - 1);
+    bg_size.height = std::min(bg_size.height, scene_sz.height - 1);
+
+    // make copy for situations when there is no optimal size
+    auto initial_bg_size = bg_size;
+
+    int width_limit_max = std::min(bg_size.width + (int)(0.4 * bg_size.width), scene_sz.width - 1);
+    int width_limit_min = bg_size.width - (int)(0.2 * bg_size.width);
+
+    int height_limit_max = std::min(bg_size.height + (int)(0.4 * bg_size.height), scene_sz.height - 1);
+    int height_limit_min = bg_size.height - (int)(0.2 * bg_size.height);
+
+    int bg_size_width, bg_size_height;
+    bool found = false;
+
+    // check that grid of values and try to find [width x height] which will give optimal sizes
+    // for cf_response_sizes when used in DFT
+    for (bg_size_width = width_limit_min; bg_size_width <= width_limit_max; ++bg_size_width) {
+        for (bg_size_height = height_limit_min; bg_size_height <= height_limit_max; ++bg_size_height) {
+
+            bg_size.width = bg_size_width;
+            bg_size.height = bg_size_height;
+
+            // make sure the differences are a multiple of 2 (makes things easier later in color histograms)
+            bg_size.width = bg_size.width - (bg_size.width - target_sz.width) % 2;
+            bg_size.height = bg_size.height - (bg_size.height - target_sz.height) % 2;
+
+            // Compute the rectangle with (or close to) params.fixedArea
+            // and same aspect ratio as the target bbox
+            double area_resize_factor = std::sqrt(fixed_area / double(bg_size.width * bg_size.height));
+
+            cv::Size norm_bg_size, cf_response_size;
+            norm_bg_size.width = std::round(bg_size.width * area_resize_factor);
+            norm_bg_size.height = std::round(bg_size.height * area_resize_factor);
+
+            // Correlation Filter (HOG) feature space
+            cf_response_size.width = std::floor(norm_bg_size.width / hog_cell_size);
+            cf_response_size.height = std::floor(norm_bg_size.height / hog_cell_size);
+
+            if (cv::getOptimalDFTSize(cf_response_size.width) == cf_response_size.width &&
+                    cv::getOptimalDFTSize(cf_response_size.height) == cf_response_size.height) {
+                found = true;
+                break;
+            }
+        }
+
+        if (found) break;
+    }
+
+    if (found)
+        return bg_size;
+    else
+        return initial_bg_size;
+}
+
+void StapleTracker::initAllAreas(const cv::Size &scene_sz) {
+
+    // we want a regular frame surrounding the object
+    auto avg_dim = (target_sz.width + target_sz.height) / 2.0;
+
+    // size from which we extract features
+    bg_size = getOptimalBgSize(scene_sz, target_sz, _params.fixed_area, _params.hog_cell_size);
 
     // pick a "safe" region smaller than bbox to avoid mislabeling
     fg_size.width = std::round(target_sz.width - avg_dim * _params.inner_padding);
     fg_size.height = std::round(target_sz.height - avg_dim * _params.inner_padding);
 
     // saturate to image size
-    cv::Size imsize = im.size();
-
-    bg_size.width = std::min(bg_size.width, imsize.width - 1);
-    bg_size.height = std::min(bg_size.height, imsize.height - 1);
+    bg_size.width = std::min(bg_size.width, scene_sz.width - 1);
+    bg_size.height = std::min(bg_size.height, scene_sz.height - 1);
 
     // make sure the differences are a multiple of 2 (makes things easier later in color histograms)
     bg_size.width = bg_size.width - (bg_size.width - target_sz.width) % 2;
@@ -443,6 +508,7 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
     assert(cn == 28);
     assert(xtsplit.size() == 28);
 
+    // TODO: optimize
     for (int k = 0; k < cn; k++)
     {
         typedef cv::Vec<float, 28> Vec28f;

@@ -21,8 +21,9 @@ protected:
     static void splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit);
     static void cropFilterResponse(const cv::Mat &response_cf, const cv::Size& response_size, cv::Mat& output);
     static void getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood);
+    static cv::Size getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, const int fixed_area, const int hog_cell_size);
 
-    void initAllAreas(const cv::Mat &im);
+    void initAllAreas(const cv::Size &scene_sz);
     void updateHistModel(bool new_model, cv::Mat &patch, double learning_rate_pwp=0.0);
     void getFeatureMap(cv::Mat &im_patch, cv::MatND &output);
     void splitFeatureMap(const cv::Mat &im);
