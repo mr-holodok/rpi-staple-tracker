@@ -12,23 +12,22 @@ public:
     cv::Rect getNextPos(const cv::Mat &im);
 
 protected:
-    void trackerTrain(const cv::Mat &im);
+    void trackerTrain(const cv::Mat &im, bool firstFrame);
     cv::Rect trackerUpdate(const cv::Mat &im);
 
-
-    static void getSubwindow(const cv::Mat &im, const cv::Point_<float>& center_pnt, const cv::Size &model_sz, const cv::Size &orig_sz, cv::Mat &out);
-    static void createGaussianResponse(const cv::Size& rect_size, double sigma, cv::Mat &output);
-    static void splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit);
-    static void cropFilterResponse(const cv::Mat &response_cf, const cv::Size& response_size, cv::Mat& output);
-    static void getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood);
-    static cv::Size getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, const int fixed_area, const int hog_cell_size);
-
     void initAllAreas(const cv::Size &scene_sz);
-    void updateHistModel(bool new_model, cv::Mat &patch, double learning_rate_pwp=0.0);
+    void updateHistModel(bool new_model, const cv::Mat &patch, double learning_rate_pwp=0.0);
     void getFeatureMap(cv::Mat &im_patch, cv::MatND &output);
     void splitFeatureMap(const cv::Mat &im);
     void getColourMap(const cv::Mat &patch, cv::Mat& output) const;
     void mergeResponses(const cv::Mat &response_cf, const cv::Mat &response_pwp, cv::Mat &response) const;
+
+    static void getSubwindow(const cv::Mat &im, const cv::Point_<float>& center_pnt, const cv::Size &orig_sz, cv::Mat &out);
+    static void createGaussianResponse(const cv::Size& rect_size, double sigma, cv::Mat &output);
+    static void splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit);
+    static void cropFilterResponse(const cv::Mat &response_cf, const cv::Size& response_size, cv::Mat& output);
+    static void getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood);
+    static cv::Size getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, int fixed_area, int hog_cell_size);
 
     struct params {
         // default values are present in case of failed config-file read
@@ -44,10 +43,9 @@ protected:
         bool den_per_channel = false;
     } _params;
 
-    bool firstFrame = false;
-
     cv::MatND featureMap;
-    std::vector<cv::Mat> featureMapSplited {28};
+    const uint FEATURE_CHANNELS = 28;
+    std::vector<cv::Mat> featureMapSplitted{FEATURE_CHANNELS};
 
     cv::Point center_pos;
     cv::Size target_sz;
@@ -68,8 +66,8 @@ protected:
     cv::Mat hann_window;
     cv::Mat yf;
 
-    std::vector<cv::Mat> hf_den;
-    std::vector<cv::Mat> hf_num;
+    std::vector<cv::Mat> hf_den{FEATURE_CHANNELS};
+    std::vector<cv::Mat> hf_num{FEATURE_CHANNELS};
 
     cv::Rect rect_position;
 };

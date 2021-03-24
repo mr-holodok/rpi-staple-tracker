@@ -16,7 +16,8 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
 
     // patch of the target + padding
     cv::Mat patch_paded;
-    getSubwindow(im, center_pos, norm_bg_size, bg_size, patch_paded);
+    getSubwindow(im, center_pos, bg_size, patch_paded);
+    cv::resize(patch_paded, patch_paded, norm_bg_size, 0, 0, cv::INTER_LINEAR);
 
     // init hist model
     updateHistModel(true, patch_paded);
@@ -35,36 +36,34 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
 
     // FURTHER STEPS needed for first training
     // extract patch of size bg_size and resize to norm_bg_size
-    cv::Mat im_patch_bg;
-    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
+    cv::Mat im_patch_bg = patch_paded;
 
     // init adn compute feature map, of cf_response_size
     featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(28));
     getFeatureMap(im_patch_bg, featureMap);
 
     // initializing feature map splits
-    assert(featureMapSplited.size() == featureMap.channels());
+    assert(featureMapSplitted.size() == featureMap.channels());
     for (int ch = 0; ch < featureMap.channels(); ++ch) {
         // 2 channel because after dft we get complex num (real + imaginary parts)
-        featureMapSplited[ch] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+        featureMapSplitted[ch] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
     }
 
     // compute FFT
-    splitMatND(featureMap, featureMapSplited);
-    for (auto& channel : featureMapSplited) {
+    splitMatND(featureMap, featureMapSplitted);
+    for (auto& channel : featureMapSplitted) {
         cv::dft(channel, channel);
     }
 
     // initial first train
-    firstFrame = true;
-    trackerTrain(im);
-    firstFrame = false;
+    trackerTrain(im, true);
 }
+
 
 // returns optimal bg_size value in terms of optimal size for DFT
 // cause cf_response_size depends on bg_size
 // also optimal DFT size is faster to compute, so method used for optimisation purposes
-cv::Size StapleTracker::getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, const int fixed_area, const int hog_cell_size) {
+cv::Size StapleTracker::getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, int fixed_area, int hog_cell_size) {
     // we want a regular frame surrounding the object
     auto avg_dim = (target_sz.width + target_sz.height) / 2.0;
 
@@ -81,10 +80,10 @@ cv::Size StapleTracker::getOptimalBgSize(const cv::Size &scene_sz, const cv::Siz
     auto initial_bg_size = bg_size;
 
     int width_limit_max = std::min(bg_size.width + (int)(0.4 * bg_size.width), scene_sz.width - 1);
-    int width_limit_min = bg_size.width - (int)(0.2 * bg_size.width);
+    int width_limit_min = bg_size.width - (int)(0.1 * bg_size.width);
 
     int height_limit_max = std::min(bg_size.height + (int)(0.4 * bg_size.height), scene_sz.height - 1);
-    int height_limit_min = bg_size.height - (int)(0.2 * bg_size.height);
+    int height_limit_min = bg_size.height - (int)(0.1 * bg_size.height);
 
     int bg_size_width, bg_size_height;
     bool found = false;
@@ -128,6 +127,7 @@ cv::Size StapleTracker::getOptimalBgSize(const cv::Size &scene_sz, const cv::Siz
     else
         return initial_bg_size;
 }
+
 
 void StapleTracker::initAllAreas(const cv::Size &scene_sz) {
 
@@ -190,14 +190,13 @@ void StapleTracker::initAllAreas(const cv::Size &scene_sz) {
     norm_pwp_search_size.height = norm_target_size.height + norm_delta_area.height - 1;
 }
 
-void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &center_pnt, const cv::Size &model_sz, const cv::Size &orig_sz, cv::Mat &out) {
+
+void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &center_pnt, const cv::Size &orig_sz, cv::Mat &out) {
     cv::Size sz = orig_sz; // scale adaptation
 
     // make sure the size is not to small
     sz.width = std::fmax(sz.width, 2);
     sz.height = std::fmax(sz.height, 2);
-
-    cv::Mat subWindow;
 
     // minimum one point of the region must be in the 'im', so values are choosen correspondigly
     cv::Point lefttop(
@@ -231,12 +230,11 @@ void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &cen
     int left = lefttopLimit.x - lefttop.x;
     int right = rightbottom.x - rightbottomLimit.x + 1;
 	
-    cv::copyMakeBorder(im(roiRect), subWindow, top, bottom, left, right, cv::BORDER_REPLICATE);
-
-    cv::resize(subWindow, out, model_sz, 0, 0, cv::INTER_LINEAR);
+    cv::copyMakeBorder(im(roiRect), out, top, bottom, left, right, cv::BORDER_REPLICATE);
 }
 
-void StapleTracker::updateHistModel(bool new_model, cv::Mat &patch, double learning_rate_pwp) {
+
+void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double learning_rate_pwp) {
     // Get BG mask (frame around target_sz)
     cv::Size pad_offset1;
     // we constrained the difference to be mod2, so we do not have to round here
@@ -277,7 +275,6 @@ void StapleTracker::updateHistModel(bool new_model, cv::Mat &patch, double learn
         );
 
     fg_mask(pad2_rect) = true;
-
 
     cv::Mat fg_mask_new;
     cv::Mat bg_mask_new;
@@ -365,59 +362,58 @@ void StapleTracker::createGaussianResponse(const cv::Size& rect_size, double sig
     } 
 }
 
-void StapleTracker::trackerTrain(const cv::Mat &im) {
+
+void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
     
-    // before TRAIN stage feature map should be generated and splited to featureMapSplited
+    // before TRAIN stage feature map should be generated and splited to featureMapSplitted
 
     // FILTER UPDATE
     // Compute expectations over circular shifts,
     // therefore divide by number of pixels.
 
-    std::vector<cv::Mat> new_hf_num;
-    std::vector<cv::Mat> new_hf_den;
+    static std::vector<cv::Mat> new_hf_num{FEATURE_CHANNELS};
+    static std::vector<cv::Mat> new_hf_den{FEATURE_CHANNELS};
+    assert(featureMapSplitted.size() == FEATURE_CHANNELS);
+
+    // making init only in first frame, aka lazy-init instead of init in every call of function
+    if (firstFrame) {
+        for (int i = 0; i < featureMapSplitted.size(); ++i) {
+            // with 2 channels
+            new_hf_num[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+            // with only 1 channel because after multiplication imaginary part are zeroed, so unnecessary
+            new_hf_den[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC1);
+        }
+    }
 
     float invArea = 1.f / (float)(cf_response_size.width * cf_response_size.height);
 
-    for (auto & ch : featureMapSplited)
-    {
-        cv::Mat dim = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+    for (int i = 0; i < featureMapSplitted.size(); ++i) {
+        const auto &ch = featureMapSplitted[i];
 
         // performing complex numbers multiplication
-        // conj(yf) .* featureMapSplited[ch]
-        dim.forEach<cv::Vec2f>
-        (
-            [&ch, this, invArea](cv::Vec2f &pair, const int * pos) {
-                auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                auto yf_vec  = yf.at<cv::Vec2f>(pos);
-                pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
-                pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
-            }
-        );
-
-        new_hf_num.push_back(std::move(dim));
-    }
-
-    for (auto & ch : featureMapSplited) {
-        // only 1 channel because after multiplication imagine part are zeroed, so unnecesary
-        cv::Mat dim_den = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC1);
+        // conj(yf) .* featureMapSplitted[ch]
+        new_hf_num[i].forEach<cv::Vec2f>([&ch, this, invArea](cv::Vec2f &pair, const int * pos) {
+                                            auto xtf_vec = ch.at<cv::Vec2f>(pos);
+                                            auto yf_vec  = yf.at<cv::Vec2f>(pos);
+                                            pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
+                                            pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
+                                        });
 
         // performing complex numbers multiplication
-        // conj(featureMapSplited[ch]) .* featureMapSplited[ch]
-        dim_den.forEach<float>
-        (
-            [this, &ch, invArea](float &val, const int * pos) {
-                auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
-            }
-        );
-
-        new_hf_den.push_back(std::move(dim_den));
+        // conj(featureMapSplitted[ch]) .* featureMapSplitted[ch]
+        new_hf_den[i].forEach<float>([this, &ch, invArea](float &val, const int * pos) {
+                                        auto xtf_vec = ch.at<cv::Vec2f>(pos);
+                                        val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
+                                    });
     }
 
     if (firstFrame) {
         // first frame, train with a single image
-        hf_den = std::move(new_hf_den);
-        hf_num = std::move(new_hf_num);
+        // as Mat type operator = performs only header copy, we need to do deep copy instead
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
+            hf_den[ch] = new_hf_den[ch].clone();
+            hf_num[ch] = new_hf_num[ch].clone();
+        }
     } else {
         // subsequent frames, update the model by linear interpolation
         for (int ch =  0; ch < featureMap.channels(); ch++) {
@@ -426,7 +422,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         }
 
         cv::Mat im_patch_bg;
-        getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
+        getSubwindow(im, center_pos, bg_size, im_patch_bg);
+        cv::resize(im_patch_bg, im_patch_bg, norm_bg_size, 0, 0, cv::INTER_LINEAR);
         updateHistModel(false, im_patch_bg, _params.learning_rate_pwp);
     }
 
@@ -438,6 +435,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         rect_position.height = target_sz.height;
     }
 }
+
 
 void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
 
@@ -487,20 +485,23 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
     }
 }
 
+
 void StapleTracker::splitFeatureMap(const cv::Mat &im) {
     // extract patch of size bg_size and resize to norm_bg_size
     cv::Mat im_patch_bg;
-    getSubwindow(im, center_pos, norm_bg_size, bg_size, im_patch_bg);
+    getSubwindow(im, center_pos, bg_size, im_patch_bg);
+    cv::resize(im_patch_bg, im_patch_bg, norm_bg_size, 0, 0, cv::INTER_LINEAR);
 
     // compute feature map, of cf_response_size
     getFeatureMap(im_patch_bg, featureMap);
 
     // compute FFT
-    splitMatND(featureMap, featureMapSplited);
-    for (auto& channel : featureMapSplited) {
+    splitMatND(featureMap, featureMapSplitted);
+    for (auto& channel : featureMapSplitted) {
         cv::dft(channel, channel);
     }
 }
+
 
 void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat> &xtsplit) {
     int cn = featureMap.channels();
@@ -522,6 +523,7 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
         );
     }
 }
+
 
 namespace {
 // Checks that imaginary part is small and returns 1-channel real part Mat
@@ -551,10 +553,11 @@ cv::Mat ensure_real(const cv::Mat &complex) {
 }
 }
 
+
 // TESTING step
 cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
-    // before UPDATE stage feature map should be generated and splited to featureMapSplited
+    // before UPDATE stage feature map should be generated and splited to featureMapSplitted
 
     // Correlation between filter and test patch gives the response
     // Solve diagonal system per pixel.
@@ -600,14 +603,14 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
     cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar(0, 0));
 
-    for (int ch = 0; ch < featureMapSplited.size(); ch++)
+    for (int ch = 0; ch < featureMapSplitted.size(); ch++)
     {   
         // performing complex numbers multiplication
-        // conj(hf[ch]) .* featureMapSplited[ch]
+        // conj(hf[ch]) .* featureMapSplitted[ch]
         response_cf_sum.forEach<cv::Vec2f>
         (
             [this, &hf, ch](cv::Vec2f &pair, const int *pos) {
-                auto xtf_vec = featureMapSplited[ch].at<cv::Vec2f>(pos);
+                auto xtf_vec = featureMapSplitted[ch].at<cv::Vec2f>(pos);
                 auto hf_vec  = hf[ch].at<cv::Vec2f>(pos);
                 pair[0] += xtf_vec[0] * hf_vec[0] + xtf_vec[1] * hf_vec[1];
                 pair[1] += xtf_vec[1] * hf_vec[0] - xtf_vec[0] * hf_vec[1];
@@ -649,7 +652,8 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
     // extract patch of size pwp_search_size and resize to norm_pwp_search_size
     cv::Mat im_patch_pwp;
-    getSubwindow(im, center_pos, norm_pwp_search_size, pwp_search_size, im_patch_pwp);
+    getSubwindow(im, center_pos, pwp_search_size, im_patch_pwp);
+    cv::resize(im_patch_pwp, im_patch_pwp, norm_pwp_search_size, 0, 0, cv::INTER_LINEAR);
 
     cv::Mat likelihood_map;
     getColourMap(im_patch_pwp, likelihood_map);
@@ -683,6 +687,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     return bounding_rect;
 }
 
+
 // CROPFILTERRESPONSE makes RESPONSE_CF of size RESPONSE_SIZE (i.e. same size of colour response)
 // prerequisite: RESPONSE_SIZE width and height must be odd
 void StapleTracker::cropFilterResponse(const cv::Mat &response_cf, const cv::Size &response_size, cv::Mat &output) {
@@ -715,6 +720,7 @@ void StapleTracker::cropFilterResponse(const cv::Mat &response_cf, const cv::Siz
         }
     } 
 }
+
 
 void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
     
@@ -766,6 +772,7 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
     }    
 }
 
+
 // GETCENTERLIKELIHOOD computes the sum over rectangles of size M.
 // CENTER_LIKELIHOOD is the 'colour response'
 void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood) {
@@ -794,14 +801,16 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
     }
 }
 
+
 // MERGERESPONSES interpolates the two responses with the hyperparameter MERGE_FACTOR
 void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &response_pwp, cv::Mat &response) const {
     response = (1 - _params.merge_factor) * response_cf + _params.merge_factor * response_pwp;
 }
 
+
 cv::Rect StapleTracker::getNextPos(const cv::Mat &im) {
     splitFeatureMap(im);
     cv::Rect newPos = trackerUpdate(im);
-    trackerTrain(im);
+    trackerTrain(im, false);
     return newPos;
 }
