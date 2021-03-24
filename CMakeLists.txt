@@ -30,3 +30,14 @@ endif(RPi2)
 
 find_package(OpenCV REQUIRED)
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} pthread)
+
+
+
+# ======== benches =======
+add_executable(bench benchmarks/split_mat_nd_bench.cpp
+        ./src/tracker.cpp
+        ./src/fhog.cpp)
+find_package(benchmark REQUIRED)
+target_link_libraries(bench benchmark::benchmark
+        ${OpenCV_LIBS}
+        pthread)
