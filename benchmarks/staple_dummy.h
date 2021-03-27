@@ -3,7 +3,7 @@
 
 #include "../src/tracker.hpp"
 
-class StapleDummy : StapleTracker {
+class StapleDummy : public StapleTracker {
 public:
     // for benchmark
     void get_feature_map_windowed(const cv::Mat &im, cv::Rect bbox, cv::MatND &output) {
@@ -40,6 +40,32 @@ public:
         }
         splitMatND(xt_windowed, channels);
     }
+
+    void prepareToTrain(const cv::Mat &im) {
+        splitFeatureMap(im);
+        cv::Rect newPos = trackerUpdate(im);
+    }
+
+    void get_hf(std::vector<cv::Mat> &hf_num_out, std::vector<cv::Mat> &hf_den_out) {
+        assert(hf_num_out.size() == FEATURE_CHANNELS);
+        assert(hf_den_out.size() == FEATURE_CHANNELS);
+
+        for (int i = 0; i < FEATURE_CHANNELS; ++i) {
+            // with 2 channels
+            hf_num_out[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
+            // with only 1 channel because after multiplication imaginary part are zeroed, so unnecessary
+            hf_den_out[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC1);
+        }
+
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
+            hf_den_out[ch] = hf_den[ch].clone();
+            hf_num_out[ch] = hf_num[ch].clone();
+        }
+    }
+
+    using StapleTracker::yf;
+    using StapleTracker::featureMapSplitted;
+    using StapleTracker::cf_response_size;
 };
 
 #endif//STAPLE_STAPLE_DUMMY_H

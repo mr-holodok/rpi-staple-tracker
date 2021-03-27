@@ -365,7 +365,7 @@ void StapleTracker::createGaussianResponse(const cv::Size& rect_size, double sig
 
 void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
     
-    // before TRAIN stage feature map should be generated and splited to featureMapSplitted
+    // before TRAIN stage feature map should be generated and splitted to featureMapSplitted
 
     // FILTER UPDATE
     // Compute expectations over circular shifts,
