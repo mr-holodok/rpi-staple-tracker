@@ -504,53 +504,57 @@ void StapleTracker::splitFeatureMap(const cv::Mat &im) {
 
 
 void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat> &xtsplit) {
+    int w = featureMap.cols;
+    int h = featureMap.rows;
     int cn = featureMap.channels();
 
     assert(cn == 28);
     assert(xtsplit.size() == 28);
 
-    // TODO: optimize
     for (int k = 0; k < cn; k++)
     {
-        typedef cv::Vec<float, 28> Vec28f;
+        for (int j = 0; j < h; ++j) {
+            auto *pDst = xtsplit[k].ptr<float>(j);
+            const auto *pSrc = featureMap.ptr<float>(j);
 
-        xtsplit[k].forEach<cv::Vec2f>
-        (
-            [&featureMap, k](cv::Vec2f &pair, const int * pos) {
-                pair[0] = featureMap.at<Vec28f>(pos)[k];
-                pair[1] = 0.0f;
+            for (int i = 0; i < w; ++i) {
+                pDst[0] = pSrc[k];
+                pDst[1] = 0.0f;
+
+                pSrc += cn;
+                pDst += 2;
             }
-        );
+        }
     }
 }
 
 
 namespace {
-// Checks that imaginary part is small and returns 1-channel real part Mat
-cv::Mat ensure_real(const cv::Mat &complex) {
-    int w = complex.cols;
-    int h = complex.rows;
+    // Checks that imaginary part is small and returns 1-channel real part Mat
+    cv::Mat ensure_real(const cv::Mat &complex) {
+        int w = complex.cols;
+        int h = complex.rows;
 
-    double sum_r{0}, sum_i{0};
+        double sum_r{0}, sum_i{0};
 
-    for (int i = 0; i < w * h; i++) {
-        sum_r += complex.at<cv::Vec2f>(i)[0] * complex.at<cv::Vec2f>(i)[0];
-        sum_i += complex.at<cv::Vec2f>(i)[1] * complex.at<cv::Vec2f>(i)[1];
-    }
-
-    //assert(sum_r * 1e-5 >= sum_i);
-
-    cv::Mat real(h, w, CV_32FC1);
-
-    real.forEach<float>
-    (
-        [&complex](float &val, const int *pos) {
-            val = complex.at<cv::Vec2f>(pos)[0];
+        for (int i = 0; i < w * h; i++) {
+            sum_r += complex.at<cv::Vec2f>(i)[0] * complex.at<cv::Vec2f>(i)[0];
+            sum_i += complex.at<cv::Vec2f>(i)[1] * complex.at<cv::Vec2f>(i)[1];
         }
-    );
 
-    return real;
-}
+        //assert(sum_r * 1e-5 >= sum_i);
+
+        cv::Mat real(h, w, CV_32FC1);
+
+        real.forEach<float>
+        (
+            [&complex](float &val, const int *pos) {
+                val = complex.at<cv::Vec2f>(pos)[0];
+            }
+        );
+
+        return real;
+    }
 }
 
 
