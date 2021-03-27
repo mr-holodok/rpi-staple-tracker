@@ -385,26 +385,35 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
         }
     }
 
+    int w = featureMap.cols;
+    int h = featureMap.rows;
     float invArea = 1.f / (float)(cf_response_size.width * cf_response_size.height);
 
-    for (int i = 0; i < featureMapSplitted.size(); ++i) {
-        const auto &ch = featureMapSplitted[i];
+    for (int ch = 0; ch < featureMapSplitted.size(); ++ch) {
 
         // performing complex numbers multiplication
         // conj(yf) .* featureMapSplitted[ch]
-        new_hf_num[i].forEach<cv::Vec2f>([&ch, this, invArea](cv::Vec2f &pair, const int * pos) {
-                                            auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                                            auto yf_vec  = yf.at<cv::Vec2f>(pos);
-                                            pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
-                                            pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
-                                        });
+        for (int j = 0; j < h; ++j) {
+            const float* pFM = featureMapSplitted[ch].ptr<float>(j);
+            const float* pYF = yf.ptr<float>(j);
+            auto pDst = new_hf_num[ch].ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i, pFM += 2, pYF += 2, ++pDst) {
+                cv::Vec2f val(pYF[1] * pFM[1] + pYF[0] * pFM[0], pYF[0] * pFM[1] - pYF[1] * pFM[0]);
+                *pDst = invArea * val;
+            }
+        }
 
         // performing complex numbers multiplication
         // conj(featureMapSplitted[ch]) .* featureMapSplitted[ch]
-        new_hf_den[i].forEach<float>([this, &ch, invArea](float &val, const int * pos) {
-                                        auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                                        val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
-                                    });
+        for (int j = 0; j < h; ++j) {
+            const float* pFM = featureMapSplitted[ch].ptr<float>(j);
+            auto pDst = new_hf_den[ch].ptr<float>(j);
+
+            for (int i = 0; i < w; ++i, pFM += 2, ++pDst) {
+                *pDst = invArea * (pFM[0] * pFM[0] + pFM[1] * pFM[1]);
+            }
+        }
     }
 
     if (firstFrame) {
