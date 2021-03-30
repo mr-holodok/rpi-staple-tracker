@@ -575,63 +575,83 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     // Correlation between filter and test patch gives the response
     // Solve diagonal system per pixel.
 
-    std::vector<cv::Mat> hf;
+    static std::vector<cv::Mat> hf {FEATURE_CHANNELS};
+
+    // first time initialization
+    if (hf[0].empty()) {
+        for (int i = 0; i < hf_num.size(); ++i)
+            hf[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
+    }
+
+    const int w = featureMap.cols;
+    const int h = featureMap.rows;
 
     if (_params.den_per_channel) {
         for (uint ch = 0; ch < hf_num.size(); ++ch) {
-            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
+            for (int j = 0; j < h; ++j) {
+                const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
+                const float* pDen = hf_den[ch].ptr<float>(j);
+                auto pDst = hf[ch].ptr<cv::Vec2f>(j);
 
-            cv::Mat rval = (hf_den[ch] + _params.lambda);
-
-            dim.forEach<cv::Vec2f>
-            (
-                [&rval, this, ch](cv::Vec2f &pair, const int *pos) {
-                    pair[0] = hf_num[ch].at<cv::Vec2f>(pos)[0] / rval.at<float>(pos);
-                    pair[1] = hf_num[ch].at<cv::Vec2f>(pos)[1] / rval.at<float>(pos);
+                for (int i = 0; i < w; ++i) {
+                    pDst[i] = pSrc[i] / (pDen[i] + _params.lambda);
                 }
-            );
-
-            hf.push_back(std::move(dim));
+            }
         }
     }
     else {
-        cv::Mat sum_hf_den(featureMap.rows, featureMap.cols, CV_32FC1, _params.lambda);
-        for (auto & ch : hf_den) {
-            sum_hf_den += ch;
-        }
-        for (auto & ch : hf_num) {
-            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
+        std::vector<float> hf_den_sum(w * h, (float)_params.lambda);
 
-            dim.forEach<cv::Vec2f>
-            (
-                [&sum_hf_den, this, &ch](cv::Vec2f &pair, const int *pos) {
-                    pair[0] = ch.at<cv::Vec2f>(pos)[0] / sum_hf_den.at<float>(pos);
-                    pair[1] = ch.at<cv::Vec2f>(pos)[1] / sum_hf_den.at<float>(pos);
+        for (int ch = 0; ch < featureMap.channels(); ++ch) {
+            float* pDst = &hf_den_sum[0];
+            for (int j = 0; j < h; ++j) {
+                const float* pDen = hf_den[ch].ptr<float>(j);
+                for (int i = 0; i < w; ++i, ++pDst) {
+                    *pDst += pDen[i];
                 }
-            );
+            }
+        }
 
-            hf.push_back(std::move(dim));
+        for (int ch = 0; ch < featureMap.channels(); ++ch) {
+            const float* pDenSum = &hf_den_sum[0];
+            for (int j = 0; j < h; ++j) {
+                const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
+                auto pDst = hf[ch].ptr<cv::Vec2f>(j);
+
+                for (int i = 0; i < w; ++i, ++pDenSum, ++pDst, ++pSrc) {
+                    *pDst = *pSrc / *pDenSum;
+                }
+            }
         }
     }
 
-    cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar(0, 0));
+    static cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
+    static cv::Mat response_cf_inv(featureMap.rows, featureMap.cols, CV_32FC2);
+
+    // as response_cf_sum accumulates sum, it need to be zeroed before accumulation
+    for (int j = 0; j < h; ++j)
+        for (int i = 0; i < w; ++i)
+            response_cf_sum.at<cv::Vec2f>(j, i) = cv::Vec2f(0.0f, 0.0f);
 
     for (int ch = 0; ch < featureMapSplitted.size(); ch++)
-    {   
+    {
         // performing complex numbers multiplication
         // conj(hf[ch]) .* featureMapSplitted[ch]
-        response_cf_sum.forEach<cv::Vec2f>
-        (
-            [this, &hf, ch](cv::Vec2f &pair, const int *pos) {
-                auto xtf_vec = featureMapSplitted[ch].at<cv::Vec2f>(pos);
-                auto hf_vec  = hf[ch].at<cv::Vec2f>(pos);
-                pair[0] += xtf_vec[0] * hf_vec[0] + xtf_vec[1] * hf_vec[1];
-                pair[1] += xtf_vec[1] * hf_vec[0] - xtf_vec[0] * hf_vec[1];
+        for (int j = 0; j < h; ++j) {
+            auto pDst = response_cf_sum.ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i, ++pDst) {
+                cv::Vec2f pHF = hf[ch].at<cv::Vec2f>(j,i);
+                cv::Vec2f pXTF = featureMapSplitted[ch].at<cv::Vec2f>(j,i);
+
+                float sumr = (pHF[0] * pXTF[0] + pHF[1] * pXTF[1]);
+                float sumi = (pHF[0] * pXTF[1] - pHF[1] * pXTF[0]);
+
+                *pDst += cv::Vec2f(sumr, sumi);
             }
-        );
+        }
     }
 
-    cv::Mat response_cf_inv;
     cv::dft(response_cf_sum, response_cf_inv, cv::DFT_SCALE | cv::DFT_INVERSE);
     cv::Mat response_cf = ensure_real(response_cf_inv);
 
