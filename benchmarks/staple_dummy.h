@@ -63,9 +63,13 @@ public:
         }
     }
 
+    using StapleTracker::splitFeatureMap;
+
     using StapleTracker::yf;
     using StapleTracker::featureMapSplitted;
     using StapleTracker::cf_response_size;
+    using StapleTracker::featureMap;
+    using StapleTracker::_params;
 };
 
 #endif//STAPLE_STAPLE_DUMMY_H

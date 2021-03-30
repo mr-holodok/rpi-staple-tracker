@@ -34,7 +34,7 @@ target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} pthread)
 
 
 # ======== benches =======
-add_executable(bench benchmarks/train_stage_loops_bench.cpp
+add_executable(bench benchmarks/update_stage_loops_bench.cpp
         ./src/tracker.cpp
         ./src/fhog.cpp)
 find_package(benchmark REQUIRED)
