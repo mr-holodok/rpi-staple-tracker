@@ -44,6 +44,7 @@ public:
     void prepareToTrain(const cv::Mat &im) {
         splitFeatureMap(im);
         cv::Rect newPos = trackerUpdate(im);
+        firstFrame = false;
     }
 
     void get_hf(std::vector<cv::Mat> &hf_num_out, std::vector<cv::Mat> &hf_den_out) {

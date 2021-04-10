@@ -5,6 +5,9 @@
 
 void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
 
+    // needed for update and train routines
+    firstFrame = true;
+
     target_sz.width = bbox.width;
     target_sz.height = bbox.height;
     
@@ -56,7 +59,7 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     }
 
     // initial first train
-    trackerTrain(im, true);
+    trackerTrain(im);
 }
 
 
@@ -363,7 +366,7 @@ void StapleTracker::createGaussianResponse(const cv::Size& rect_size, double sig
 }
 
 
-void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
+void StapleTracker::trackerTrain(const cv::Mat &im) {
     
     // before TRAIN stage feature map should be generated and splitted to featureMapSplitted
 
@@ -479,17 +482,13 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
         const float* pHann = hann_window.ptr<float>(j);
         const uchar* pGray = grayimg.ptr<uchar>(j);
 
-        for (int i = 0; i < w; ++i)
+        for (int i = 0; i < w; ++i, ++pDst, ++pHann, ++pGray)
         {
             // apply Hann window
             Vec28f& val = pDst[0];
 
             val = val * pHann[0];
             val[0] = (alpha * (float)(pGray[0]) - betta) * pHann[0];
-
-            ++pDst;
-            ++pHann;
-            ++pGray;
         }
     }
 }
@@ -539,11 +538,17 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
 
 
 namespace {
-    // Checks that imaginary part is small and returns 1-channel real part Mat
-    cv::Mat ensure_real(const cv::Mat &complex) {
+    // Returns 1-channel real part of given complex Mat
+    // and in debug mode checks that imaginary part is small
+    //
+    // cv::Mat &real_part_out - should be inited before call, as CV_32FC1 with
+    //                          rows and cols same as in complex Mat.
+    void ensure_real(const cv::Mat &complex, cv::Mat &real_part_out) {
         int w = complex.cols;
         int h = complex.rows;
 
+        // evaluate next section only in debug mode
+#ifndef NDEBUG
         double sum_r{0}, sum_i{0};
 
         for (int i = 0; i < w * h; i++) {
@@ -551,18 +556,18 @@ namespace {
             sum_i += complex.at<cv::Vec2f>(i)[1] * complex.at<cv::Vec2f>(i)[1];
         }
 
-        //assert(sum_r * 1e-5 >= sum_i);
+        assert(std::sqrt(sum_r) * 1e-5 >= std::sqrt(sum_i));
+#endif
 
-        cv::Mat real(h, w, CV_32FC1);
 
-        real.forEach<float>
-        (
-            [&complex](float &val, const int *pos) {
-                val = complex.at<cv::Vec2f>(pos)[0];
+        for (int j = 0; j < h; ++j) {
+            auto pDst = real_part_out.ptr<float>(j);
+            const float* pSrc = complex.ptr<float>(j);
+
+            for (int i = 0; i < w; ++i, ++pDst, pSrc += 2) {
+                *pDst = *pSrc;
             }
-        );
-
-        return real;
+        }
     }
 }
 
@@ -578,7 +583,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     static std::vector<cv::Mat> hf {FEATURE_CHANNELS};
 
     // first time initialization
-    if (hf[0].empty()) {
+    if (firstFrame) {
         for (int i = 0; i < hf_num.size(); ++i)
             hf[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
     }
@@ -625,8 +630,12 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
         }
     }
 
-    static cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
-    static cv::Mat response_cf_inv(featureMap.rows, featureMap.cols, CV_32FC2);
+    static cv::Mat response_cf_sum, response_cf_inv;
+
+    if (firstFrame) {
+        response_cf_sum = cv::Mat(h, w, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
+        response_cf_inv = cv::Mat(h, w, CV_32FC2);
+    }
 
     // as response_cf_sum accumulates sum, it need to be zeroed before accumulation
     for (int j = 0; j < h; ++j)
@@ -653,27 +662,31 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     }
 
     cv::dft(response_cf_sum, response_cf_inv, cv::DFT_SCALE | cv::DFT_INVERSE);
-    cv::Mat response_cf = ensure_real(response_cf_inv);
+
+    cv::Mat response_cf(h, w, CV_32FC1);
+    ensure_real(response_cf_inv, response_cf);
 
     // Crop square search region (in feature pixels).
 
-    cv::Size newsz = norm_delta_area;
-    newsz.width = std::floor(newsz.width / _params.hog_cell_size);
-    newsz.height = std::floor(newsz.height / _params.hog_cell_size);
+    static cv::Size newsz;
+    if (firstFrame) {
+        newsz = norm_delta_area;
+        newsz.width = std::floor(newsz.width / _params.hog_cell_size);
+        newsz.height = std::floor(newsz.height / _params.hog_cell_size);
 
-    // newsz must be odd for function cropFilterResponse
-    if (newsz.width % 2 == 0) {
-        newsz.width -= 1;
-    }
-    if (newsz.height % 2 == 0) {
-        newsz.height -= 1;
+        // newsz must be odd for function cropFilterResponse
+        if (newsz.width % 2 == 0) {
+            newsz.width -= 1;
+        }
+        if (newsz.height % 2 == 0) {
+            newsz.height -= 1;
+        }
     }
 
     cv::Mat response_cf_cropped;
     cropFilterResponse(response_cf, newsz, response_cf_cropped);
 
-    if (_params.hog_cell_size > 1)
-    {
+    if (_params.hog_cell_size > 1) {
         cv::Mat temp;
         cv::resize(response_cf_cropped, temp, norm_delta_area, 0, 0, cv::INTER_LINEAR);
         response_cf = temp;
@@ -844,6 +857,7 @@ void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &re
 cv::Rect StapleTracker::getNextPos(const cv::Mat &im) {
     splitFeatureMap(im);
     cv::Rect newPos = trackerUpdate(im);
-    trackerTrain(im, false);
+    firstFrame = false;
+    trackerTrain(im);
     return newPos;
 }

@@ -12,7 +12,7 @@ public:
     cv::Rect getNextPos(const cv::Mat &im);
 
 protected:
-    void trackerTrain(const cv::Mat &im, bool firstFrame);
+    void trackerTrain(const cv::Mat &im);
     cv::Rect trackerUpdate(const cv::Mat &im);
 
     void initAllAreas(const cv::Size &scene_sz);
@@ -46,6 +46,8 @@ protected:
     cv::MatND featureMap;
     const uint FEATURE_CHANNELS = 28;
     std::vector<cv::Mat> featureMapSplitted{FEATURE_CHANNELS};
+
+    bool firstFrame = false;
 
     cv::Point center_pos;
     cv::Size target_sz;
