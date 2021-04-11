@@ -663,7 +663,10 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
 
     cv::dft(response_cf_sum, response_cf_inv, cv::DFT_SCALE | cv::DFT_INVERSE);
 
-    cv::Mat response_cf(h, w, CV_32FC1);
+    static cv::Mat response_cf;
+    if (firstFrame) {
+        response_cf = cv::Mat(h, w, CV_32FC1);
+    }
     ensure_real(response_cf_inv, response_cf);
 
     // Crop square search region (in feature pixels).
@@ -687,31 +690,41 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     cropFilterResponse(response_cf, newsz, response_cf_cropped);
 
     if (_params.hog_cell_size > 1) {
-        cv::Mat temp;
-        cv::resize(response_cf_cropped, temp, norm_delta_area, 0, 0, cv::INTER_LINEAR);
-        response_cf = temp;
+        cv::resize(response_cf_cropped, response_cf_cropped, norm_delta_area, 0, 0, cv::INTER_LINEAR);
     }
 
-    cv::Size pwp_search_size;
-    pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
-    pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
+    static cv::Size pwp_search_size;
+    if (firstFrame) {
+        pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
+        pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
+    }
 
     // extract patch of size pwp_search_size and resize to norm_pwp_search_size
     cv::Mat im_patch_pwp;
     getSubwindow(im, center_pos, pwp_search_size, im_patch_pwp);
     cv::resize(im_patch_pwp, im_patch_pwp, norm_pwp_search_size, 0, 0, cv::INTER_LINEAR);
 
-    cv::Mat likelihood_map;
+    static cv::Mat likelihood_map;
+    if (firstFrame) {
+        likelihood_map = cv::Mat(im_patch_pwp.rows, im_patch_pwp.cols, CV_32FC1);
+    }
     getColourMap(im_patch_pwp, likelihood_map);
 
     // each pixel of response_pwp loosely represents the likelihood that
     // the target (of size norm_target_size) is centred on it
-    cv::Mat response_pwp;
+    static cv::Mat response_pwp;
+    if (firstFrame) {
+        response_pwp = cv::Mat(likelihood_map.rows - norm_target_size.height + 1,
+                               likelihood_map.cols - norm_target_size.width + 1, CV_32FC1);
+    }
     getCenterLikelihood(likelihood_map, norm_target_size, response_pwp);
 
     // ESTIMATION
-    cv::Mat response;
-    mergeResponses(response_cf, response_pwp, response);
+    static cv::Mat response;
+    if (firstFrame) {
+        response = cv::Mat(norm_delta_area.height, norm_delta_area.width, CV_32FC1);
+    }
+    mergeResponses(response_cf_cropped, response_pwp, response);
 
     double max_val = 0;
     cv::Point max_loc;
@@ -776,7 +789,9 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
     int bin_width = 256 / _params.n_bins;
 
-    output = cv::Mat(h, w, CV_32FC1);
+    assert(output.rows == h);
+    assert(output.cols == w);
+    assert(output.channels() == 1);
 
     // convert image to d channels array
     //patch_array = reshape(double(patch), w*h, d);
@@ -821,7 +836,7 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
 // GETCENTERLIKELIHOOD computes the sum over rectangles of size M.
 // CENTER_LIKELIHOOD is the 'colour response'
-void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood) {
+void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, const cv::Size& m, cv::Mat& center_likelihood) {
     
     int h = object_likelihood.rows;
     int w = object_likelihood.cols;
@@ -835,7 +850,9 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
     // compute integral image
     cv::integral(object_likelihood, integral_img);
 
-    center_likelihood = cv::Mat(n2, n1, CV_32FC1);
+    assert(center_likelihood.rows == n2);
+    assert(center_likelihood.cols == n1);
+    assert(center_likelihood.channels() == 1);
 
     for (int j = 0; j < n2; ++j)
     {
