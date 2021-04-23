@@ -307,6 +307,12 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
         fg_hist = fg_hist / fgtotal;
     } 
     else { // update the model
+#ifdef RPi
+#pragma omp parallel sections
+        {
+#pragma omp section
+            {
+#endif
         cv::MatND bg_hist_tmp;
         cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist_tmp, dims, sizes, ranges);
 
@@ -315,6 +321,14 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
             bgtotal = 1;
         }
         bg_hist_tmp = bg_hist_tmp / bgtotal;
+        bg_hist = (1 - learning_rate_pwp) * bg_hist + learning_rate_pwp * bg_hist_tmp;
+#ifdef RPi
+            }
+#pragma omp section
+            {
+#endif
+        cv::MatND fg_hist_tmp;
+        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist_tmp, dims, sizes, ranges);
 
         int fgtotal = cv::countNonZero(fg_mask_new);
         if (fgtotal == 0) {
@@ -323,6 +337,10 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
         fg_hist_tmp = fg_hist_tmp / fgtotal;
 
         fg_hist = (1 - learning_rate_pwp) * fg_hist + learning_rate_pwp * fg_hist_tmp;
+#ifdef RPi
+            }
+        }
+#endif
     }
 }
 
@@ -384,7 +402,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
     int h = featureMap.rows;
     float invArea = 1.f / (float)(cf_response_size.width * cf_response_size.height);
 
-    for (int ch = 0; ch < featureMapSplitted.size(); ++ch) {
+#pragma omp parallel for num_threads(2)
+    for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
 
         // performing complex numbers multiplication
         // conj(yf) .* featureMapSplitted[ch]
@@ -393,9 +412,9 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
             const float* pYF = yf.ptr<float>(j);
             auto pDst = new_hf_num[ch].ptr<cv::Vec2f>(j);
 
-            for (int i = 0; i < w; ++i, pFM += 2, pYF += 2, ++pDst) {
-                cv::Vec2f val(pYF[1] * pFM[1] + pYF[0] * pFM[0], pYF[0] * pFM[1] - pYF[1] * pFM[0]);
-                *pDst = invArea * val;
+            for (int i = 0; i < w; ++i) {
+                cv::Vec2f val(pYF[2*i+1] * pFM[2*i+1] + pYF[2*i] * pFM[2*i], pYF[2*i] * pFM[2*i+1] - pYF[2*i+1] * pFM[2*i]);
+                pDst[i] = invArea * val;
             }
         }
 
@@ -405,8 +424,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
             const float* pFM = featureMapSplitted[ch].ptr<float>(j);
             auto pDst = new_hf_den[ch].ptr<float>(j);
 
-            for (int i = 0; i < w; ++i, pFM += 2, ++pDst) {
-                *pDst = invArea * (pFM[0] * pFM[0] + pFM[1] * pFM[1]);
+            for (int i = 0; i < w; ++i) {
+                pDst[i] = invArea * (pFM[2*i] * pFM[2*i] + pFM[2*i+1] * pFM[2*i+1]);
             }
         }
     }
@@ -420,7 +439,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
         }
     } else {
         // subsequent frames, update the model by linear interpolation
-        for (int ch =  0; ch < featureMap.channels(); ch++) {
+#pragma omp parallel for num_threads(2)
+        for (int ch =  0; ch < FEATURE_CHANNELS; ch++) {
             hf_den[ch] = (1 - _params.learning_rate_cf) * hf_den[ch] + _params.learning_rate_cf * new_hf_den[ch];
             hf_num[ch] = (1 - _params.learning_rate_cf) * hf_num[ch] + _params.learning_rate_cf * new_hf_num[ch];
         }
@@ -508,6 +528,7 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
     assert(cn == FEATURE_CHANNELS);
     assert(xtsplit.size() == FEATURE_CHANNELS);
 
+#pragma omp parallel for num_threads(2)
     for (int k = 0; k < cn; k++)
     {
         for (int j = 0; j < h; ++j) {
@@ -515,11 +536,8 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
             const auto *pSrc = featureMap.ptr<float>(j);
 
             for (int i = 0; i < w; ++i) {
-                pDst[0] = pSrc[k];
-                pDst[1] = 0.0f;
-
-                pSrc += cn;
-                pDst += 2;
+                pDst[2*i] = pSrc[cn*i + k];
+                pDst[2*i + 1] = 0.0f;
             }
         }
     }
@@ -606,7 +624,8 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
             }
         }
 
-        for (int ch = 0; ch < featureMap.channels(); ++ch) {
+#pragma omp parallel for num_threads(2)
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
             const float* pDenSum = &hf_den_sum[0];
             for (int j = 0; j < h; ++j) {
                 const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
