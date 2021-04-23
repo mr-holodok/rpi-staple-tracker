@@ -42,12 +42,12 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     cv::Mat im_patch_bg = patch_paded;
 
     // init adn compute feature map, of cf_response_size
-    featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(28));
+    featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(FEATURE_CHANNELS));
     getFeatureMap(im_patch_bg, featureMap);
 
     // initializing feature map splits
     assert(featureMapSplitted.size() == featureMap.channels());
-    for (int ch = 0; ch < featureMap.channels(); ++ch) {
+    for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
         // 2 channel because after dft we get complex num (real + imaginary parts)
         featureMapSplitted[ch] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
     }
@@ -238,52 +238,50 @@ void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &cen
 
 
 void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double learning_rate_pwp) {
-    // Get BG mask (frame around target_sz)
-    cv::Size pad_offset1;
-    // we constrained the difference to be mod2, so we do not have to round here
-    pad_offset1.width = (bg_size.width - target_sz.width) / 2;
-    pad_offset1.height = (bg_size.height - target_sz.height) / 2;
+    static cv::Mat fg_mask_new, bg_mask_new;
+    if (new_model) {
+        // Get BG mask (frame around target_sz)
+        cv::Size pad_offset1;
+        // we constrained the difference to be mod2, so we do not have to round here
+        pad_offset1.width = (bg_size.width - target_sz.width) / 2;
+        pad_offset1.height = (bg_size.height - target_sz.height) / 2;
 
-    pad_offset1.width = std::fmax(pad_offset1.width, 1);
-    pad_offset1.height = std::fmax(pad_offset1.height, 1);
+        pad_offset1.width = std::fmax(pad_offset1.width, 1);
+        pad_offset1.height = std::fmax(pad_offset1.height, 1);
 
-    cv::Mat bg_mask(bg_size, CV_8UC1, cv::Scalar(1)); // init bg_mask
+        cv::Mat bg_mask(bg_size, CV_8UC1, cv::Scalar(1));// init bg_mask
 
-    cv::Rect pad1_rect(
-        pad_offset1.width,
-        pad_offset1.height,
-        bg_size.width  - 2 * pad_offset1.width,
-        bg_size.height - 2 * pad_offset1.height
-        );
+        cv::Rect pad1_rect(
+                pad_offset1.width,
+                pad_offset1.height,
+                bg_size.width - 2 * pad_offset1.width,
+                bg_size.height - 2 * pad_offset1.height);
 
-    bg_mask(pad1_rect) = false;
-    
-    // Get FG mask (inner portion of target_sz)
-    cv::Size pad_offset2;
+        bg_mask(pad1_rect) = false;
 
-    // we constrained the difference to be mod2, so we do not have to round here
-    pad_offset2.width = (bg_size.width - fg_size.width) / 2;
-    pad_offset2.height = (bg_size.height - fg_size.height) / 2;
+        // Get FG mask (inner portion of target_sz)
+        cv::Size pad_offset2;
 
-    pad_offset2.width = std::fmax(pad_offset2.width, 1);
-    pad_offset2.height = std::fmax(pad_offset2.height, 1);
+        // we constrained the difference to be mod2, so we do not have to round here
+        pad_offset2.width = (bg_size.width - fg_size.width) / 2;
+        pad_offset2.height = (bg_size.height - fg_size.height) / 2;
 
-    cv::Mat fg_mask(bg_size, CV_8UC1, cv::Scalar(0)); // init fg_mask
+        pad_offset2.width = std::fmax(pad_offset2.width, 1);
+        pad_offset2.height = std::fmax(pad_offset2.height, 1);
 
-    cv::Rect pad2_rect(
-        pad_offset2.width,
-        pad_offset2.height,
-        bg_size.width - 2 * pad_offset2.width,
-        bg_size.height - 2 * pad_offset2.height
-        );
+        cv::Mat fg_mask(bg_size, CV_8UC1, cv::Scalar(0));// init fg_mask
 
-    fg_mask(pad2_rect) = true;
+        cv::Rect pad2_rect(
+                pad_offset2.width,
+                pad_offset2.height,
+                bg_size.width - 2 * pad_offset2.width,
+                bg_size.height - 2 * pad_offset2.height);
 
-    cv::Mat fg_mask_new;
-    cv::Mat bg_mask_new;
+        fg_mask(pad2_rect) = true;
 
-    cv::resize(fg_mask, fg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
-    cv::resize(bg_mask, bg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+        cv::resize(fg_mask, fg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+        cv::resize(bg_mask, bg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+    }
 
     int imgCount = 1;
     int dims = 3;
@@ -294,16 +292,14 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
 
     // (TRAIN) BUILD THE MODEL
     if (new_model) {
-        // TODO: find out what bh_hist stores (3 dimensions - why and wtf)
         cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist, dims, sizes, ranges);
-        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist, dims, sizes, ranges);
-
         int bgtotal = cv::countNonZero(bg_mask_new);
         if (bgtotal == 0) { 
             bgtotal = 1;
         }
         bg_hist = bg_hist / bgtotal;
 
+        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist, dims, sizes, ranges);
         int fgtotal = cv::countNonZero(fg_mask_new);
         if (fgtotal == 0) {
             fgtotal = 1;
@@ -312,10 +308,7 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
     } 
     else { // update the model
         cv::MatND bg_hist_tmp;
-        cv::MatND fg_hist_tmp;
-
         cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist_tmp, dims, sizes, ranges);
-        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist_tmp, dims, sizes, ranges);
 
         int bgtotal = cv::countNonZero(bg_mask_new);
         if (bgtotal == 0) {
@@ -329,7 +322,6 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
         }
         fg_hist_tmp = fg_hist_tmp / fgtotal;
 
-        bg_hist = (1 - learning_rate_pwp) * bg_hist + learning_rate_pwp * bg_hist_tmp;
         fg_hist = (1 - learning_rate_pwp) * fg_hist + learning_rate_pwp * fg_hist_tmp;
     }
 }
@@ -380,7 +372,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im) {
 
     // making init only in first frame, aka lazy-init instead of init in every call of function
     if (firstFrame) {
-        for (int i = 0; i < featureMapSplitted.size(); ++i) {
+        for (int i = 0; i < FEATURE_CHANNELS; ++i) {
             // with 2 channels
             new_hf_num[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
             // with only 1 channel because after multiplication imaginary part are zeroed, so unnecessary
@@ -467,9 +459,6 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
 
     cv::Mat grayimg;
     cv::cvtColor(new_im_patch, grayimg, cv::COLOR_BGR2GRAY);
-    
-    // TODO: refactor
-    // out(:,:,1) = single(im_patch)/255 - 0.5;
 
     float alpha = 1. / 255.0;
     float betta = 0.5;
@@ -516,8 +505,8 @@ void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat>
     int h = featureMap.rows;
     int cn = featureMap.channels();
 
-    assert(cn == 28);
-    assert(xtsplit.size() == 28);
+    assert(cn == FEATURE_CHANNELS);
+    assert(xtsplit.size() == FEATURE_CHANNELS);
 
     for (int k = 0; k < cn; k++)
     {
@@ -607,7 +596,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     else {
         std::vector<float> hf_den_sum(w * h, (float)_params.lambda);
 
-        for (int ch = 0; ch < featureMap.channels(); ++ch) {
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
             float* pDst = &hf_den_sum[0];
             for (int j = 0; j < h; ++j) {
                 const float* pDen = hf_den[ch].ptr<float>(j);
@@ -642,7 +631,7 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
         for (int i = 0; i < w; ++i)
             response_cf_sum.at<cv::Vec2f>(j, i) = cv::Vec2f(0.0f, 0.0f);
 
-    for (int ch = 0; ch < featureMapSplitted.size(); ch++)
+    for (int ch = 0; ch < FEATURE_CHANNELS; ch++)
     {
         // performing complex numbers multiplication
         // conj(hf[ch]) .* featureMapSplitted[ch]
@@ -826,9 +815,6 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
             pSrc += d;
             ++pDst;
-
-            // (TODO) in theory it should be at 0.5 (unseen colors shoud have max entropy)
-            //likelihood_map(isnan(likelihood_map)) = 0;
         }
     }    
 }

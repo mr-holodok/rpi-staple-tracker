@@ -29,15 +29,18 @@ else ()
 endif(RPi2)
 
 find_package(OpenCV REQUIRED)
-target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} pthread)
+find_package(OpenMP REQUIRED)
+target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS}
+        OpenMP::OpenMP_CXX
+        pthread)
 
 
 # ======== benches =======
 add_executable(bench benchmarks/updateHistModel_bench.cpp
         ./src/tracker.cpp
         ./src/fhog.cpp)
+
 find_package(benchmark REQUIRED)
-find_package(OpenMP REQUIRED)
 
 target_link_libraries(bench benchmark::benchmark
         ${OpenCV_LIBS}
