@@ -83,6 +83,29 @@ void splitMatND_cache(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit) {
     }
 }
 
+void splitMatND_threaded(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit) {
+    int w = xt.cols;
+    int h = xt.rows;
+    int cn = xt.channels();
+
+    assert(cn == 28);
+    assert(xtsplit.size() == 28);
+
+#pragma omp parallel for num_threads(2)
+    for (int k = 0; k < cn; k++)
+    {
+        for (int j = 0; j < h; ++j) {
+            float *pDst = xtsplit[k].ptr<float>(j);
+            const float *pSrc = xt.ptr<float>(j);
+
+            for (int i = 0; i < w; ++i) {
+                pDst[2*i] = pSrc[cn*i+k];
+                pDst[2*i+1] = 0.0f;
+            }
+        }
+    }
+}
+
 void preparation_step() {
     std::string sequence = "../sequence";
 
@@ -119,7 +142,7 @@ void result_correctness_check_step() {
 
     splitMatND_impr(xt_windowed, xtsplit1);
 
-    splitMatND_cache(xt_windowed, xtsplit2);
+    splitMatND_threaded(xt_windowed, xtsplit2);
 
     bool result = true;
     for (int i = 0; i < xtsplit1.size(); ++i) {
@@ -155,6 +178,16 @@ static void BM_SplitMatND_improved(benchmark::State& state) {
 }
 BENCHMARK(BM_SplitMatND_improved);
 
+static void BM_SplitMatND_threaded(benchmark::State& state) {
+
+    preparation_step();
+
+    for (auto _ : state) {
+        splitMatND_threaded(xt_windowed, xtsplit2);
+    }
+}
+BENCHMARK(BM_SplitMatND_threaded);
+
 static void BM_SplitMatND_cache(benchmark::State& state) {
 
     preparation_step();
@@ -164,24 +197,6 @@ static void BM_SplitMatND_cache(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_SplitMatND_cache);
-
-//static void BM_Vec_Emplace(benchmark::State& state) {
-//    for (auto _ : state) {
-//        std::vector<cv::Mat> vec;
-//        for (int i = 0; i < 28; ++i)
-//            vec.emplace_back(37, 37, CV_32FC2);
-//    }
-//}
-//BENCHMARK(BM_Vec_Emplace);
-//
-//static void BM_Vec_Construct(benchmark::State& state) {
-//    for (auto _ : state) {
-//        std::vector<cv::Mat> vec(28);
-//        for (int i = 0; i < 28; ++i)
-//            vec[i] = cv::Mat(37, 37, CV_32FC2);
-//    }
-//}
-//BENCHMARK(BM_Vec_Construct);
 
 BENCHMARK_MAIN();
 

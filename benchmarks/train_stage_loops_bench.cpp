@@ -90,6 +90,37 @@ void trainRawForLoop(const cv::Mat &im, std::vector<cv::Mat> &new_hf_num, std::v
     }
 }
 
+void trainRawForLoop_thr(const cv::Mat &im, std::vector<cv::Mat> &new_hf_num, std::vector<cv::Mat> &new_hf_den) {
+    int w = tracker.featureMapSplitted[0].cols;
+    int h = tracker.featureMapSplitted[0].rows;
+    float invArea = 1.f / (float)(tracker.cf_response_size.width * tracker.cf_response_size.height);
+
+#pragma omp parallel for num_threads(4)
+    for (int ch = 0; ch < tracker.FEATURE_CHANNELS; ++ch) {
+
+        for (int j = 0; j < h; ++j) {
+            const float *pFM = tracker.featureMapSplitted[ch].ptr<float>(j);
+            const float *pYF = tracker.yf.ptr<float>(j);
+            auto pDst = new_hf_num[ch].ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i) {
+                cv::Vec2f val(pYF[2*i+1] * pFM[2*i+1] + pYF[2*i] * pFM[2*i], pYF[2*i] * pFM[2*i+1] - pYF[2*i+1] * pFM[2*i]);
+                pDst[i] = invArea * val;
+            }
+        }
+
+
+        for (int j = 0; j < h; ++j) {
+            const float *pFM = tracker.featureMapSplitted[ch].ptr<float>(j);
+            auto pDst = new_hf_den[ch].ptr<float>(j);
+
+            for (int i = 0; i < w; ++i) {
+                pDst[i] = invArea * (pFM[2*i] * pFM[2*i] + pFM[2*i+1] * pFM[2*i+1]);
+            }
+        }
+    }
+}
+
 static void BM_TrainForEach(benchmark::State& state) {
 
     preparation_step();
@@ -109,6 +140,16 @@ static void BM_TrainRawForLoop(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_TrainRawForLoop);
+
+static void BM_TrainRawForLoop_thr(benchmark::State& state) {
+
+    preparation_step();
+
+    for (auto _ : state) {
+        trainRawForLoop_thr(image, hf_num2, hf_den2);
+    }
+}
+BENCHMARK(BM_TrainRawForLoop_thr);
 
 
 BENCHMARK_MAIN();

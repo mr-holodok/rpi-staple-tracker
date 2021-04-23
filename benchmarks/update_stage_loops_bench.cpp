@@ -118,6 +118,36 @@ void hfUpdateForLoop(std::vector<cv::Mat> &new_hf) {
 }
 
 
+void hfUpdateForLoop_thr(std::vector<cv::Mat> &new_hf) {
+    const int w = tracker.featureMap.cols;
+    const int h = tracker.featureMap.rows;
+    std::vector<float> hf_den_sum(w * h, (float)tracker._params.lambda);
+
+    for (int ch = 0; ch < tracker.featureMap.channels(); ++ch) {
+        float* pDst = &hf_den_sum[0];
+        for (int j = 0; j < h; ++j) {
+            const float* pDen = hf_den[ch].ptr<float>(j);
+            for (int i = 0; i < w; ++i, ++pDst) {
+                *pDst += pDen[i];
+            }
+        }
+    }
+
+#pragma omp parallel for num_threads(2)
+    for (int ch = 0; ch < tracker.featureMap.channels(); ++ch) {
+        const float* pDenSum = &hf_den_sum[0];
+        for (int j = 0; j < h; ++j) {
+            const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
+            auto pDst = new_hf[ch].ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i) {
+                pDst[i] = pSrc[i] / pDenSum[i];
+            }
+        }
+    }
+}
+
+
 void invUpdateForEachLoop(const std::vector<cv::Mat> &hf) {
     cv::Mat response_cf_sum(tracker.featureMap.rows, tracker.featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.0f, 0.0f));
 
@@ -197,6 +227,14 @@ static void BM_hfUpdateForLoop(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_hfUpdateForLoop);
+
+static void BM_hfUpdateForLoop_thr(benchmark::State& state) {
+    preparation_step();
+    for (auto _ : state) {
+        hfUpdateForLoop_thr(hf2);
+    }
+}
+BENCHMARK(BM_hfUpdateForLoop_thr);
 
 static void BM_invUpdateForEachLoop(benchmark::State& state) {
     preparation_step();
