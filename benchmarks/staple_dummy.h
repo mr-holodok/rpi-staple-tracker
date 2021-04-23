@@ -134,6 +134,13 @@ public:
             fg_hist = fg_hist / fgtotal;
         }
         else { // update the model
+#ifdef RPi
+        #pragma omp parallel sections
+            {
+        #pragma omp section
+                {
+#endif
+
             cv::MatND bg_hist_tmp;
             cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist_tmp, dims, sizes, ranges);
 
@@ -143,7 +150,11 @@ public:
             }
             bg_hist_tmp = bg_hist_tmp / bgtotal;
             bg_hist = (1 - learning_rate_pwp) * bg_hist + learning_rate_pwp * bg_hist_tmp;
-
+#ifdef RPi
+                }
+#pragma omp section
+                {
+#endif
             cv::MatND fg_hist_tmp;
             cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist_tmp, dims, sizes, ranges);
 
@@ -153,6 +164,10 @@ public:
             }
             fg_hist_tmp = fg_hist_tmp / fgtotal;
             fg_hist = (1 - learning_rate_pwp) * fg_hist + learning_rate_pwp * fg_hist_tmp;
+#ifdef RPi
+                }
+            }
+#endif
         }
     }
 
