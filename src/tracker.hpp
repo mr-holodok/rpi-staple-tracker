@@ -12,7 +12,7 @@ public:
     cv::Rect getNextPos(const cv::Mat &im);
 
 protected:
-    void trackerTrain(const cv::Mat &im, bool firstFrame);
+    void trackerTrain(const cv::Mat &im);
     cv::Rect trackerUpdate(const cv::Mat &im);
 
     void initAllAreas(const cv::Size &scene_sz);
@@ -26,7 +26,7 @@ protected:
     static void createGaussianResponse(const cv::Size& rect_size, double sigma, cv::Mat &output);
     static void splitMatND(const cv::MatND &xt, std::vector<cv::Mat> &xtsplit);
     static void cropFilterResponse(const cv::Mat &response_cf, const cv::Size& response_size, cv::Mat& output);
-    static void getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood);
+    static void getCenterLikelihood(const cv::Mat &object_likelihood, const cv::Size& m, cv::Mat& center_likelihood);
     static cv::Size getOptimalBgSize(const cv::Size &scene_sz, const cv::Size &target_sz, int fixed_area, int hog_cell_size);
 
     struct params {
@@ -46,6 +46,8 @@ protected:
     cv::MatND featureMap;
     const uint FEATURE_CHANNELS = 28;
     std::vector<cv::Mat> featureMapSplitted{FEATURE_CHANNELS};
+
+    bool firstFrame = false;
 
     cv::Point center_pos;
     cv::Size target_sz;

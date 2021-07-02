@@ -5,6 +5,9 @@
 
 void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
 
+    // needed for update and train routines
+    firstFrame = true;
+
     target_sz.width = bbox.width;
     target_sz.height = bbox.height;
     
@@ -39,12 +42,12 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     cv::Mat im_patch_bg = patch_paded;
 
     // init adn compute feature map, of cf_response_size
-    featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(28));
+    featureMap = cv::MatND(cf_response_size.height, cf_response_size.width, CV_32FC(FEATURE_CHANNELS));
     getFeatureMap(im_patch_bg, featureMap);
 
     // initializing feature map splits
     assert(featureMapSplitted.size() == featureMap.channels());
-    for (int ch = 0; ch < featureMap.channels(); ++ch) {
+    for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
         // 2 channel because after dft we get complex num (real + imaginary parts)
         featureMapSplitted[ch] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
     }
@@ -56,7 +59,7 @@ void StapleTracker::trackerInit(const cv::Mat &im, const cv::Rect& bbox) {
     }
 
     // initial first train
-    trackerTrain(im, true);
+    trackerTrain(im);
 }
 
 
@@ -235,52 +238,50 @@ void StapleTracker::getSubwindow(const cv::Mat &im, const cv::Point_<float> &cen
 
 
 void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double learning_rate_pwp) {
-    // Get BG mask (frame around target_sz)
-    cv::Size pad_offset1;
-    // we constrained the difference to be mod2, so we do not have to round here
-    pad_offset1.width = (bg_size.width - target_sz.width) / 2;
-    pad_offset1.height = (bg_size.height - target_sz.height) / 2;
+    static cv::Mat fg_mask_new, bg_mask_new;
+    if (new_model) {
+        // Get BG mask (frame around target_sz)
+        cv::Size pad_offset1;
+        // we constrained the difference to be mod2, so we do not have to round here
+        pad_offset1.width = (bg_size.width - target_sz.width) / 2;
+        pad_offset1.height = (bg_size.height - target_sz.height) / 2;
 
-    pad_offset1.width = std::fmax(pad_offset1.width, 1);
-    pad_offset1.height = std::fmax(pad_offset1.height, 1);
+        pad_offset1.width = std::fmax(pad_offset1.width, 1);
+        pad_offset1.height = std::fmax(pad_offset1.height, 1);
 
-    cv::Mat bg_mask(bg_size, CV_8UC1, cv::Scalar(1)); // init bg_mask
+        cv::Mat bg_mask(bg_size, CV_8UC1, cv::Scalar(1));// init bg_mask
 
-    cv::Rect pad1_rect(
-        pad_offset1.width,
-        pad_offset1.height,
-        bg_size.width  - 2 * pad_offset1.width,
-        bg_size.height - 2 * pad_offset1.height
-        );
+        cv::Rect pad1_rect(
+                pad_offset1.width,
+                pad_offset1.height,
+                bg_size.width - 2 * pad_offset1.width,
+                bg_size.height - 2 * pad_offset1.height);
 
-    bg_mask(pad1_rect) = false;
-    
-    // Get FG mask (inner portion of target_sz)
-    cv::Size pad_offset2;
+        bg_mask(pad1_rect) = false;
 
-    // we constrained the difference to be mod2, so we do not have to round here
-    pad_offset2.width = (bg_size.width - fg_size.width) / 2;
-    pad_offset2.height = (bg_size.height - fg_size.height) / 2;
+        // Get FG mask (inner portion of target_sz)
+        cv::Size pad_offset2;
 
-    pad_offset2.width = std::fmax(pad_offset2.width, 1);
-    pad_offset2.height = std::fmax(pad_offset2.height, 1);
+        // we constrained the difference to be mod2, so we do not have to round here
+        pad_offset2.width = (bg_size.width - fg_size.width) / 2;
+        pad_offset2.height = (bg_size.height - fg_size.height) / 2;
 
-    cv::Mat fg_mask(bg_size, CV_8UC1, cv::Scalar(0)); // init fg_mask
+        pad_offset2.width = std::fmax(pad_offset2.width, 1);
+        pad_offset2.height = std::fmax(pad_offset2.height, 1);
 
-    cv::Rect pad2_rect(
-        pad_offset2.width,
-        pad_offset2.height,
-        bg_size.width - 2 * pad_offset2.width,
-        bg_size.height - 2 * pad_offset2.height
-        );
+        cv::Mat fg_mask(bg_size, CV_8UC1, cv::Scalar(0));// init fg_mask
 
-    fg_mask(pad2_rect) = true;
+        cv::Rect pad2_rect(
+                pad_offset2.width,
+                pad_offset2.height,
+                bg_size.width - 2 * pad_offset2.width,
+                bg_size.height - 2 * pad_offset2.height);
 
-    cv::Mat fg_mask_new;
-    cv::Mat bg_mask_new;
+        fg_mask(pad2_rect) = true;
 
-    cv::resize(fg_mask, fg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
-    cv::resize(bg_mask, bg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+        cv::resize(fg_mask, fg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+        cv::resize(bg_mask, bg_mask_new, norm_bg_size, 0, 0, cv::INTER_LINEAR);
+    }
 
     int imgCount = 1;
     int dims = 3;
@@ -291,16 +292,14 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
 
     // (TRAIN) BUILD THE MODEL
     if (new_model) {
-        // TODO: find out what bh_hist stores (3 dimensions - why and wtf)
         cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist, dims, sizes, ranges);
-        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist, dims, sizes, ranges);
-
         int bgtotal = cv::countNonZero(bg_mask_new);
         if (bgtotal == 0) { 
             bgtotal = 1;
         }
         bg_hist = bg_hist / bgtotal;
 
+        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist, dims, sizes, ranges);
         int fgtotal = cv::countNonZero(fg_mask_new);
         if (fgtotal == 0) {
             fgtotal = 1;
@@ -308,17 +307,28 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
         fg_hist = fg_hist / fgtotal;
     } 
     else { // update the model
+#ifdef RPi
+#pragma omp parallel sections
+        {
+#pragma omp section
+            {
+#endif
         cv::MatND bg_hist_tmp;
-        cv::MatND fg_hist_tmp;
-
         cv::calcHist(&patch, imgCount, channels, bg_mask_new, bg_hist_tmp, dims, sizes, ranges);
-        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist_tmp, dims, sizes, ranges);
 
         int bgtotal = cv::countNonZero(bg_mask_new);
         if (bgtotal == 0) {
             bgtotal = 1;
         }
         bg_hist_tmp = bg_hist_tmp / bgtotal;
+        bg_hist = (1 - learning_rate_pwp) * bg_hist + learning_rate_pwp * bg_hist_tmp;
+#ifdef RPi
+            }
+#pragma omp section
+            {
+#endif
+        cv::MatND fg_hist_tmp;
+        cv::calcHist(&patch, imgCount, channels, fg_mask_new, fg_hist_tmp, dims, sizes, ranges);
 
         int fgtotal = cv::countNonZero(fg_mask_new);
         if (fgtotal == 0) {
@@ -326,8 +336,11 @@ void StapleTracker::updateHistModel(bool new_model, const cv::Mat &patch, double
         }
         fg_hist_tmp = fg_hist_tmp / fgtotal;
 
-        bg_hist = (1 - learning_rate_pwp) * bg_hist + learning_rate_pwp * bg_hist_tmp;
         fg_hist = (1 - learning_rate_pwp) * fg_hist + learning_rate_pwp * fg_hist_tmp;
+#ifdef RPi
+            }
+        }
+#endif
     }
 }
 
@@ -363,9 +376,9 @@ void StapleTracker::createGaussianResponse(const cv::Size& rect_size, double sig
 }
 
 
-void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
+void StapleTracker::trackerTrain(const cv::Mat &im) {
     
-    // before TRAIN stage feature map should be generated and splited to featureMapSplitted
+    // before TRAIN stage feature map should be generated and splitted to featureMapSplitted
 
     // FILTER UPDATE
     // Compute expectations over circular shifts,
@@ -377,7 +390,7 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
 
     // making init only in first frame, aka lazy-init instead of init in every call of function
     if (firstFrame) {
-        for (int i = 0; i < featureMapSplitted.size(); ++i) {
+        for (int i = 0; i < FEATURE_CHANNELS; ++i) {
             // with 2 channels
             new_hf_num[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2);
             // with only 1 channel because after multiplication imaginary part are zeroed, so unnecessary
@@ -385,26 +398,36 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
         }
     }
 
+    int w = featureMap.cols;
+    int h = featureMap.rows;
     float invArea = 1.f / (float)(cf_response_size.width * cf_response_size.height);
 
-    for (int i = 0; i < featureMapSplitted.size(); ++i) {
-        const auto &ch = featureMapSplitted[i];
+#pragma omp parallel for num_threads(2)
+    for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
 
         // performing complex numbers multiplication
         // conj(yf) .* featureMapSplitted[ch]
-        new_hf_num[i].forEach<cv::Vec2f>([&ch, this, invArea](cv::Vec2f &pair, const int * pos) {
-                                            auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                                            auto yf_vec  = yf.at<cv::Vec2f>(pos);
-                                            pair[0] = (xtf_vec[0] * yf_vec[0] + xtf_vec[1] * yf_vec[1]) * invArea;
-                                            pair[1] = (xtf_vec[1] * yf_vec[0] - xtf_vec[0] * yf_vec[1]) * invArea;
-                                        });
+        for (int j = 0; j < h; ++j) {
+            const float* pFM = featureMapSplitted[ch].ptr<float>(j);
+            const float* pYF = yf.ptr<float>(j);
+            auto pDst = new_hf_num[ch].ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i) {
+                cv::Vec2f val(pYF[2*i+1] * pFM[2*i+1] + pYF[2*i] * pFM[2*i], pYF[2*i] * pFM[2*i+1] - pYF[2*i+1] * pFM[2*i]);
+                pDst[i] = invArea * val;
+            }
+        }
 
         // performing complex numbers multiplication
         // conj(featureMapSplitted[ch]) .* featureMapSplitted[ch]
-        new_hf_den[i].forEach<float>([this, &ch, invArea](float &val, const int * pos) {
-                                        auto xtf_vec = ch.at<cv::Vec2f>(pos);
-                                        val = (xtf_vec[0] * xtf_vec[0] + xtf_vec[1] * xtf_vec[1]) * invArea;
-                                    });
+        for (int j = 0; j < h; ++j) {
+            const float* pFM = featureMapSplitted[ch].ptr<float>(j);
+            auto pDst = new_hf_den[ch].ptr<float>(j);
+
+            for (int i = 0; i < w; ++i) {
+                pDst[i] = invArea * (pFM[2*i] * pFM[2*i] + pFM[2*i+1] * pFM[2*i+1]);
+            }
+        }
     }
 
     if (firstFrame) {
@@ -416,7 +439,8 @@ void StapleTracker::trackerTrain(const cv::Mat &im, bool firstFrame) {
         }
     } else {
         // subsequent frames, update the model by linear interpolation
-        for (int ch =  0; ch < featureMap.channels(); ch++) {
+#pragma omp parallel for num_threads(2)
+        for (int ch =  0; ch < FEATURE_CHANNELS; ch++) {
             hf_den[ch] = (1 - _params.learning_rate_cf) * hf_den[ch] + _params.learning_rate_cf * new_hf_den[ch];
             hf_num[ch] = (1 - _params.learning_rate_cf) * hf_num[ch] + _params.learning_rate_cf * new_hf_num[ch];
         }
@@ -455,9 +479,6 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
 
     cv::Mat grayimg;
     cv::cvtColor(new_im_patch, grayimg, cv::COLOR_BGR2GRAY);
-    
-    // TODO: refactor
-    // out(:,:,1) = single(im_patch)/255 - 0.5;
 
     float alpha = 1. / 255.0;
     float betta = 0.5;
@@ -470,17 +491,13 @@ void StapleTracker::getFeatureMap(cv::Mat &im_patch, cv::MatND &output) {
         const float* pHann = hann_window.ptr<float>(j);
         const uchar* pGray = grayimg.ptr<uchar>(j);
 
-        for (int i = 0; i < w; ++i)
+        for (int i = 0; i < w; ++i, ++pDst, ++pHann, ++pGray)
         {
             // apply Hann window
             Vec28f& val = pDst[0];
 
             val = val * pHann[0];
             val[0] = (alpha * (float)(pGray[0]) - betta) * pHann[0];
-
-            ++pDst;
-            ++pHann;
-            ++pGray;
         }
     }
 }
@@ -504,53 +521,61 @@ void StapleTracker::splitFeatureMap(const cv::Mat &im) {
 
 
 void StapleTracker::splitMatND(const cv::MatND &featureMap, std::vector<cv::Mat> &xtsplit) {
+    int w = featureMap.cols;
+    int h = featureMap.rows;
     int cn = featureMap.channels();
 
-    assert(cn == 28);
-    assert(xtsplit.size() == 28);
+    assert(cn == FEATURE_CHANNELS);
+    assert(xtsplit.size() == FEATURE_CHANNELS);
 
-    // TODO: optimize
+#pragma omp parallel for num_threads(2)
     for (int k = 0; k < cn; k++)
     {
-        typedef cv::Vec<float, 28> Vec28f;
+        for (int j = 0; j < h; ++j) {
+            auto *pDst = xtsplit[k].ptr<float>(j);
+            const auto *pSrc = featureMap.ptr<float>(j);
 
-        xtsplit[k].forEach<cv::Vec2f>
-        (
-            [&featureMap, k](cv::Vec2f &pair, const int * pos) {
-                pair[0] = featureMap.at<Vec28f>(pos)[k];
-                pair[1] = 0.0f;
+            for (int i = 0; i < w; ++i) {
+                pDst[2*i] = pSrc[cn*i + k];
+                pDst[2*i + 1] = 0.0f;
             }
-        );
+        }
     }
 }
 
 
 namespace {
-// Checks that imaginary part is small and returns 1-channel real part Mat
-cv::Mat ensure_real(const cv::Mat &complex) {
-    int w = complex.cols;
-    int h = complex.rows;
+    // Returns 1-channel real part of given complex Mat
+    // and in debug mode checks that imaginary part is small
+    //
+    // cv::Mat &real_part_out - should be inited before call, as CV_32FC1 with
+    //                          rows and cols same as in complex Mat.
+    void ensure_real(const cv::Mat &complex, cv::Mat &real_part_out) {
+        int w = complex.cols;
+        int h = complex.rows;
 
-    double sum_r{0}, sum_i{0};
+        // evaluate next section only in debug mode
+#ifndef NDEBUG
+        double sum_r{0}, sum_i{0};
 
-    for (int i = 0; i < w * h; i++) {
-        sum_r += complex.at<cv::Vec2f>(i)[0] * complex.at<cv::Vec2f>(i)[0];
-        sum_i += complex.at<cv::Vec2f>(i)[1] * complex.at<cv::Vec2f>(i)[1];
-    }
-
-    //assert(sum_r * 1e-5 >= sum_i);
-
-    cv::Mat real(h, w, CV_32FC1);
-
-    real.forEach<float>
-    (
-        [&complex](float &val, const int *pos) {
-            val = complex.at<cv::Vec2f>(pos)[0];
+        for (int i = 0; i < w * h; i++) {
+            sum_r += complex.at<cv::Vec2f>(i)[0] * complex.at<cv::Vec2f>(i)[0];
+            sum_i += complex.at<cv::Vec2f>(i)[1] * complex.at<cv::Vec2f>(i)[1];
         }
-    );
 
-    return real;
-}
+        assert(std::sqrt(sum_r) * 1e-5 >= std::sqrt(sum_i));
+#endif
+
+
+        for (int j = 0; j < h; ++j) {
+            auto pDst = real_part_out.ptr<float>(j);
+            const float* pSrc = complex.ptr<float>(j);
+
+            for (int i = 0; i < w; ++i, ++pDst, pSrc += 2) {
+                *pDst = *pSrc;
+            }
+        }
+    }
 }
 
 
@@ -562,110 +587,152 @@ cv::Rect StapleTracker::trackerUpdate(const cv::Mat &im) {
     // Correlation between filter and test patch gives the response
     // Solve diagonal system per pixel.
 
-    std::vector<cv::Mat> hf;
+    static std::vector<cv::Mat> hf {FEATURE_CHANNELS};
+
+    // first time initialization
+    if (firstFrame) {
+        for (int i = 0; i < hf_num.size(); ++i)
+            hf[i] = cv::Mat(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
+    }
+
+    const int w = featureMap.cols;
+    const int h = featureMap.rows;
 
     if (_params.den_per_channel) {
         for (uint ch = 0; ch < hf_num.size(); ++ch) {
-            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
+            for (int j = 0; j < h; ++j) {
+                const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
+                const float* pDen = hf_den[ch].ptr<float>(j);
+                auto pDst = hf[ch].ptr<cv::Vec2f>(j);
 
-            cv::Mat rval = (hf_den[ch] + _params.lambda);
-
-            dim.forEach<cv::Vec2f>
-            (
-                [&rval, this, ch](cv::Vec2f &pair, const int *pos) {
-                    pair[0] = hf_num[ch].at<cv::Vec2f>(pos)[0] / rval.at<float>(pos);
-                    pair[1] = hf_num[ch].at<cv::Vec2f>(pos)[1] / rval.at<float>(pos);
+                for (int i = 0; i < w; ++i) {
+                    pDst[i] = pSrc[i] / (pDen[i] + _params.lambda);
                 }
-            );
-
-            hf.push_back(std::move(dim));
+            }
         }
     }
     else {
-        cv::Mat sum_hf_den(featureMap.rows, featureMap.cols, CV_32FC1, _params.lambda);
-        for (auto & ch : hf_den) {
-            sum_hf_den += ch;
-        }
-        for (auto & ch : hf_num) {
-            cv::Mat dim(featureMap.rows, featureMap.cols, CV_32FC2);
+        std::vector<float> hf_den_sum(w * h, (float)_params.lambda);
 
-            dim.forEach<cv::Vec2f>
-            (
-                [&sum_hf_den, this, &ch](cv::Vec2f &pair, const int *pos) {
-                    pair[0] = ch.at<cv::Vec2f>(pos)[0] / sum_hf_den.at<float>(pos);
-                    pair[1] = ch.at<cv::Vec2f>(pos)[1] / sum_hf_den.at<float>(pos);
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
+            float* pDst = &hf_den_sum[0];
+            for (int j = 0; j < h; ++j) {
+                const float* pDen = hf_den[ch].ptr<float>(j);
+                for (int i = 0; i < w; ++i, ++pDst) {
+                    *pDst += pDen[i];
                 }
-            );
+            }
+        }
 
-            hf.push_back(std::move(dim));
+#pragma omp parallel for num_threads(2)
+        for (int ch = 0; ch < FEATURE_CHANNELS; ++ch) {
+            const float* pDenSum = &hf_den_sum[0];
+            for (int j = 0; j < h; ++j) {
+                const cv::Vec2f* pSrc = hf_num[ch].ptr<cv::Vec2f>(j);
+                auto pDst = hf[ch].ptr<cv::Vec2f>(j);
+
+                for (int i = 0; i < w; ++i, ++pDenSum, ++pDst, ++pSrc) {
+                    *pDst = *pSrc / *pDenSum;
+                }
+            }
         }
     }
 
-    cv::Mat response_cf_sum(featureMap.rows, featureMap.cols, CV_32FC2, cv::Scalar(0, 0));
+    static cv::Mat response_cf_sum, response_cf_inv;
 
-    for (int ch = 0; ch < featureMapSplitted.size(); ch++)
-    {   
+    if (firstFrame) {
+        response_cf_sum = cv::Mat(h, w, CV_32FC2, cv::Scalar_<float>(0.f, 0.f));
+        response_cf_inv = cv::Mat(h, w, CV_32FC2);
+    }
+
+    // as response_cf_sum accumulates sum, it need to be zeroed before accumulation
+    for (int j = 0; j < h; ++j)
+        for (int i = 0; i < w; ++i)
+            response_cf_sum.at<cv::Vec2f>(j, i) = cv::Vec2f(0.0f, 0.0f);
+
+    for (int ch = 0; ch < FEATURE_CHANNELS; ch++)
+    {
         // performing complex numbers multiplication
         // conj(hf[ch]) .* featureMapSplitted[ch]
-        response_cf_sum.forEach<cv::Vec2f>
-        (
-            [this, &hf, ch](cv::Vec2f &pair, const int *pos) {
-                auto xtf_vec = featureMapSplitted[ch].at<cv::Vec2f>(pos);
-                auto hf_vec  = hf[ch].at<cv::Vec2f>(pos);
-                pair[0] += xtf_vec[0] * hf_vec[0] + xtf_vec[1] * hf_vec[1];
-                pair[1] += xtf_vec[1] * hf_vec[0] - xtf_vec[0] * hf_vec[1];
+        for (int j = 0; j < h; ++j) {
+            auto pDst = response_cf_sum.ptr<cv::Vec2f>(j);
+
+            for (int i = 0; i < w; ++i, ++pDst) {
+                cv::Vec2f pHF = hf[ch].at<cv::Vec2f>(j,i);
+                cv::Vec2f pXTF = featureMapSplitted[ch].at<cv::Vec2f>(j,i);
+
+                float sumr = (pHF[0] * pXTF[0] + pHF[1] * pXTF[1]);
+                float sumi = (pHF[0] * pXTF[1] - pHF[1] * pXTF[0]);
+
+                *pDst += cv::Vec2f(sumr, sumi);
             }
-        );
+        }
     }
 
-    cv::Mat response_cf_inv;
     cv::dft(response_cf_sum, response_cf_inv, cv::DFT_SCALE | cv::DFT_INVERSE);
-    cv::Mat response_cf = ensure_real(response_cf_inv);
+
+    static cv::Mat response_cf;
+    if (firstFrame) {
+        response_cf = cv::Mat(h, w, CV_32FC1);
+    }
+    ensure_real(response_cf_inv, response_cf);
 
     // Crop square search region (in feature pixels).
 
-    cv::Size newsz = norm_delta_area;
-    newsz.width = std::floor(newsz.width / _params.hog_cell_size);
-    newsz.height = std::floor(newsz.height / _params.hog_cell_size);
+    static cv::Size newsz;
+    if (firstFrame) {
+        newsz = norm_delta_area;
+        newsz.width = std::floor(newsz.width / _params.hog_cell_size);
+        newsz.height = std::floor(newsz.height / _params.hog_cell_size);
 
-    // newsz must be odd for function cropFilterResponse
-    if (newsz.width % 2 == 0) {
-        newsz.width -= 1;
-    }
-    if (newsz.height % 2 == 0) {
-        newsz.height -= 1;
+        // newsz must be odd for function cropFilterResponse
+        if (newsz.width % 2 == 0) {
+            newsz.width -= 1;
+        }
+        if (newsz.height % 2 == 0) {
+            newsz.height -= 1;
+        }
     }
 
     cv::Mat response_cf_cropped;
     cropFilterResponse(response_cf, newsz, response_cf_cropped);
 
-    if (_params.hog_cell_size > 1)
-    {
-        cv::Mat temp;
-        cv::resize(response_cf_cropped, temp, norm_delta_area, 0, 0, cv::INTER_LINEAR);
-        response_cf = temp;
+    if (_params.hog_cell_size > 1) {
+        cv::resize(response_cf_cropped, response_cf_cropped, norm_delta_area, 0, 0, cv::INTER_LINEAR);
     }
 
-    cv::Size pwp_search_size;
-    pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
-    pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
+    static cv::Size pwp_search_size;
+    if (firstFrame) {
+        pwp_search_size.width = std::round(norm_pwp_search_size.width / area_resize_factor);
+        pwp_search_size.height = std::round(norm_pwp_search_size.height / area_resize_factor);
+    }
 
     // extract patch of size pwp_search_size and resize to norm_pwp_search_size
     cv::Mat im_patch_pwp;
     getSubwindow(im, center_pos, pwp_search_size, im_patch_pwp);
     cv::resize(im_patch_pwp, im_patch_pwp, norm_pwp_search_size, 0, 0, cv::INTER_LINEAR);
 
-    cv::Mat likelihood_map;
+    static cv::Mat likelihood_map;
+    if (firstFrame) {
+        likelihood_map = cv::Mat(im_patch_pwp.rows, im_patch_pwp.cols, CV_32FC1);
+    }
     getColourMap(im_patch_pwp, likelihood_map);
 
     // each pixel of response_pwp loosely represents the likelihood that
     // the target (of size norm_target_size) is centred on it
-    cv::Mat response_pwp;
+    static cv::Mat response_pwp;
+    if (firstFrame) {
+        response_pwp = cv::Mat(likelihood_map.rows - norm_target_size.height + 1,
+                               likelihood_map.cols - norm_target_size.width + 1, CV_32FC1);
+    }
     getCenterLikelihood(likelihood_map, norm_target_size, response_pwp);
 
     // ESTIMATION
-    cv::Mat response;
-    mergeResponses(response_cf, response_pwp, response);
+    static cv::Mat response;
+    if (firstFrame) {
+        response = cv::Mat(norm_delta_area.height, norm_delta_area.width, CV_32FC1);
+    }
+    mergeResponses(response_cf_cropped, response_pwp, response);
 
     double max_val = 0;
     cv::Point max_loc;
@@ -730,7 +797,9 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
     int bin_width = 256 / _params.n_bins;
 
-    output = cv::Mat(h, w, CV_32FC1);
+    assert(output.rows == h);
+    assert(output.cols == w);
+    assert(output.channels() == 1);
 
     // convert image to d channels array
     //patch_array = reshape(double(patch), w*h, d);
@@ -765,9 +834,6 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
             pSrc += d;
             ++pDst;
-
-            // (TODO) in theory it should be at 0.5 (unseen colors shoud have max entropy)
-            //likelihood_map(isnan(likelihood_map)) = 0;
         }
     }    
 }
@@ -775,7 +841,7 @@ void StapleTracker::getColourMap(const cv::Mat &patch, cv::Mat& output) const {
 
 // GETCENTERLIKELIHOOD computes the sum over rectangles of size M.
 // CENTER_LIKELIHOOD is the 'colour response'
-void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Size m, cv::Mat& center_likelihood) {
+void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, const cv::Size& m, cv::Mat& center_likelihood) {
     
     int h = object_likelihood.rows;
     int w = object_likelihood.cols;
@@ -789,7 +855,9 @@ void StapleTracker::getCenterLikelihood(const cv::Mat &object_likelihood, cv::Si
     // compute integral image
     cv::integral(object_likelihood, integral_img);
 
-    center_likelihood = cv::Mat(n2, n1, CV_32FC1);
+    assert(center_likelihood.rows == n2);
+    assert(center_likelihood.cols == n1);
+    assert(center_likelihood.channels() == 1);
 
     for (int j = 0; j < n2; ++j)
     {
@@ -811,6 +879,7 @@ void StapleTracker::mergeResponses(const cv::Mat &response_cf, const cv::Mat &re
 cv::Rect StapleTracker::getNextPos(const cv::Mat &im) {
     splitFeatureMap(im);
     cv::Rect newPos = trackerUpdate(im);
-    trackerTrain(im, false);
+    firstFrame = false;
+    trackerTrain(im);
     return newPos;
 }
