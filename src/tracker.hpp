@@ -44,7 +44,7 @@ protected:
     } _params;
 
     cv::MatND featureMap;
-    const uint FEATURE_CHANNELS = 28;
+    const static uint FEATURE_CHANNELS = 28;
     std::vector<cv::Mat> featureMapSplitted{FEATURE_CHANNELS};
 
     bool firstFrame = false;
